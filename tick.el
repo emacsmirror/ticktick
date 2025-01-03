@@ -45,7 +45,7 @@
   :group 'tickel)
 
 (defcustom tickel-client-secret "6eh+gE#66+3lKHJv56d)EU8&eru_k$*8"
-  "Tickel client secret."
+  "TickTick client secret."
   :type 'string
   :group 'tickel)
 
@@ -60,3 +60,33 @@
 (defvar tickel-token nil
   "Access token for accessing the TickTick API.
 This is a plist containing token information.")
+
+(defun tickel-authorize ()
+  "Authorize tick.el with TickTick and obtain an access token."
+  (interactive)
+  (let* ((state (format "%06x" (random (expt 16 6))))
+         (auth-url (concat "https://ticktick.com/oauth/authorize?"
+                           (url-build-query-string
+                            `(("client_id" ,tickel-client-id)
+                              ("response_type" "code")
+                              ("redirect_uri" ,tickel-redirect-uri)
+                              ("scope" ,tickel-auth-scopes)
+                              ("state" ,state)))))
+         (authorization (concat "Basic "
+                                (base64-encode-string
+                                 (concat tickel-client-id ":" tickel-client-secret)
+                                 t)))
+         code token-response)
+    ;; Open the authorization URL in the browser
+    (browse-url auth-url)
+    (message "Please authorize the application in your browser and enter the authorization code from the redirected URL (which comes after '?code=').")
+    ;; Prompt the user to enter the authorization code
+    (setq code (read-string "Enter authorization code: "))
+    ;; Exchange the authorization code for access token
+    (setq token-response
+          (tickel--exchange-code-for-token code authorization))
+    (if token-response
+        (progn
+          (setq tickel-token token-response)
+          (message "Authorization successful!"))
+      (message "Failed to obtain access token."))))
