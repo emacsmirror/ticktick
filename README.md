@@ -1,4 +1,4 @@
-# Tick.el
+# tick.el
 `tick.el` is a package (work-in-progress) allowing Emacs to interface with [TickTick](https://ticktick.com), a task management app.
 
 Planned features:

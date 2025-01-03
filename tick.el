@@ -197,7 +197,17 @@ DATA is an alist of data to send with the request."
       (message "Failed to retrieve projects.")
       nil)))
 
-;; tickel-get-tasks
+(defun tickel-get-tasks (project-id)
+  "Retrieve the list of tasks for PROJECT-ID from TickTick."
+  (interactive "sProject ID: ")
+  (let* ((endpoint (format "/open/v1/project/%s/data" project-id))
+         (data (tickel-request "GET" endpoint)))
+    (if data
+        (let ((tasks (plist-get data :tasks)))
+          (message "Tasks retrieved successfully.")
+          tasks)
+      (message "Failed to retrieve tasks.")
+      nil)))
 
 ;; tickel-create-task
 
