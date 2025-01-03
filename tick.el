@@ -17,7 +17,7 @@
   :group 'ticktick)
 
 (defcustom ticktick-redirect-uri "http://localhost"
-  "OAuth2 redirect URI for TickTick. It should be http://localhost by default."
+  "OAuth2 redirect URI for TickTick."
   :type 'string
   :group 'ticktick)
 
@@ -33,3 +33,30 @@
          ticktick-client-id
          ticktick-client-secret
          ticktick-redirect-uri)))
+
+(defgroup tickel nil
+  "Interface with TickTick API."
+  :prefix "tickel-"
+  :group 'applications)
+
+(defcustom tickel-client-id "uxXCDqEv3nV3C2M1hn"
+  "TickTick client ID."
+  :type 'string
+  :group 'tickel)
+
+(defcustom tickel-client-secret "6eh+gE#66+3lKHJv56d)EU8&eru_k$*8"
+  "Tickel client secret."
+  :type 'string
+  :group 'tickel)
+
+(defcustom tickel-auth-scopes "tasks:write tasks:read"
+  "Space-separated scopes for TickTick API access."
+  :type 'string
+  :group 'tickel)
+
+(defvar tickel-redirect-uri "http://localhost"
+  "The redirect URI registered with TickTick.")
+
+(defvar tickel-token nil
+  "Access token for accessing the TickTick API.
+This is a plist containing token information.")
