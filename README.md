@@ -10,8 +10,8 @@ Planned features:
 ## To-do list
 - [x] OAuth2 authorization
 - [x] API request
-- [ ] ticktick-get-projects
-- [ ] ticktick-get-tasks
+- [x] ticktick-get-projects
+- [x] ticktick-get-tasks
 - [ ] ticktick-create-task
 - [ ] ticktick-update-task (includes completing tasks)
 - [ ] ticktick-delete-task

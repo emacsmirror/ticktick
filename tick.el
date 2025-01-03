@@ -209,9 +209,35 @@ DATA is an alist of data to send with the request."
       (message "Failed to retrieve tasks.")
       nil)))
 
-;; tickel-create-task
+(defun tickel-create-task (project-id title &optional content)
+  "Create a new task with TITLE in the project with PROJECT-ID.
+Optional argument CONTENT is the task content."
+  (interactive "sProject ID: \nsTask Title: \nsTask Content (optional): ")
+  (let ((data `(("title" . ,title)
+                ("projectId" . ,project-id)
+                ,@(when content `(("content" . ,content))))))
+    (let ((result (tickel-request "POST" "/open/v1/task" data)))
+      (if result
+          (message "Task '%s' created in project '%s'." title project-id)
+        (message "Failed to create task.")))))
 
-;; tickel-update-task
+(defun tickel-update-task (task-id project-id updates)
+  "Update the task with TASK-ID in PROJECT-ID using UPDATES alist.
+UPDATES should be an alist of fields to update."
+  (let ((endpoint (format "/open/v1/task/%s" task-id))
+        (data (append `(("id" . ,task-id)
+                        ("projectId" . ,project-id))
+                      updates)))
+    (let ((result (tickel-request "POST" endpoint data)))
+      (if result
+          (message "Task '%s' updated." task-id)
+        (message "Failed to update task.")))))
 
-;; tickel-delete-task
-
+(defun tickel-delete-task (project-id task-id)
+  "Delete the task with TASK-ID from PROJECT-ID."
+  (interactive "sProject ID: \nsTask ID: ")
+  (let ((endpoint (format "/open/v1/project/%s/task/%s" project-id task-id)))
+    (let ((result (tickel-request "DELETE" endpoint)))
+      (if result
+          (message "Task '%s' deleted from project '%s'." task-id project-id)
+        (message "Failed to delete task.")))))
