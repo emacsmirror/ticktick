@@ -12,7 +12,8 @@ Planned features:
 - [x] API request
 - [x] ticktick-get-projects
 - [x] ticktick-get-tasks
-- [ ] ticktick-create-task
+- [x] ticktick-create-task
+- [ ] tickel major mode
 - [ ] ticktick-update-task (includes completing tasks)
 - [ ] ticktick-delete-task
 - [ ] ticktick-sync

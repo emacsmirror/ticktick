@@ -5,12 +5,12 @@
   :prefix "ticktick-"
   :group 'applications)
 
-(defcustom ticktick-client-id ""
+(defcustom ticktick-client-id "uxXCDqEv3nV3C2M1hn"
   "OAuth2 client ID for TickTick"
   :type 'string
   :group 'ticktick)
 
-(defcustom ticktick-client-secret ""
+(defcustom ticktick-client-secret "6eh+gE#66+3lKHJv56d)EU8&eru_k$*8"
   "OAuth2 client secret for TickTick"
   :type 'string
   :safe #'stringp
@@ -151,6 +151,21 @@ This is a plist containing token information.")
             (message "Token refreshed!"))
         (message "Failed to refresh token.")))))
 
+(defun tickel--ensure-token ()
+  "Ensure we have a valid access token."
+  (unless (and tickel-token
+               (plist-get tickel-token :access_token)
+               (not (tickel--token-expired-p tickel-token)))
+    (tickel-refresh-token)))
+
+(defun tickel--token-expired-p (token)
+  "Check if TOKEN has expired."
+  (let ((expires-in (plist-get token :expires_in))
+        (created-at (plist-get token :created_at)))
+    (if (and expires-in created-at)
+        (> (float-time) (+ created-at expires-in -30)) ; refresh 30 seconds before expiry
+      nil)))
+
 (defun tickel-request (method endpoint &optional data)
   "Send a request to the TickTick API.
 METHOD is the HTTP method as a string (e.g., \"GET\", \"POST\").
@@ -241,3 +256,4 @@ UPDATES should be an alist of fields to update."
       (if result
           (message "Task '%s' deleted from project '%s'." task-id project-id)
         (message "Failed to delete task.")))))
+
