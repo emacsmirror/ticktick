@@ -150,3 +150,49 @@ This is a plist containing token information.")
             (setq tickel-token token-data)
             (message "Token refreshed!"))
         (message "Failed to refresh token.")))))
+
+(defun tickel-request (method endpoint &optional data)
+  "Send a request to the TickTick API.
+METHOD is the HTTP method as a string (e.g., \"GET\", \"POST\").
+ENDPOINT is the API endpoint (e.g., \"/open/v1/project\").
+DATA is an alist of data to send with the request."
+  (tickel--ensure-token)
+  (let* ((url-request-method method)
+         (url (concat "https://api.ticktick.com" endpoint))
+         (access-token (plist-get tickel-token :access_token))
+         (url-request-extra-headers `(("Authorization" . ,(concat "Bearer " access-token))
+                                      ("Content-Type" . "application/json")))
+         (url-request-data (and data (encode-coding-string (json-encode data) 'utf-8)))
+         response status)
+    (with-current-buffer (url-retrieve-synchronously url t t)
+      (goto-char url-http-end-of-headers)
+      (setq response (buffer-substring-no-properties (point) (point-max)))
+      (setq status url-http-response-status)
+      (kill-buffer (current-buffer)))
+    (cond
+     ((and (>= status 200) (< status 300))
+      ;; Success: parse the JSON response
+      (if (string-blank-p response)
+          nil
+        (let ((json-object-type 'plist))
+          (json-read-from-string response))))
+     ((= status 401)
+      ;; Unauthorized: Try refreshing the token
+      (tickel-refresh-token)
+      ;; Retry the request once
+      (tickel-request method endpoint data))
+     (t
+      ;; Other errors
+      (message "HTTP Error %s: %s" status response)
+      nil))))
+
+;; tickel-get-projects
+
+;; tickel-get-tasks
+
+;; tickel-create-task
+
+;; tickel-update-task
+
+;; tickel-delete-task
+
