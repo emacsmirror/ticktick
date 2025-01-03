@@ -29,7 +29,7 @@
         (oauth2-auth-and-store 
          "https://ticktick.com/oauth/authorize"
          "https://ticktick.com/oauth/token"
-         "tasks:write"
+         "tasks:read tasks:write"
          ticktick-client-id
          ticktick-client-secret
          ticktick-redirect-uri)))
@@ -115,3 +115,38 @@ This is a plist containing token information.")
     (if (plist-get token-data :access_token)
         token-data
       nil)))
+
+(defun tickel-refresh-token ()
+  "Refresh the OAuth2 token."
+  (interactive)
+  (when tickel-token
+    ;; Prepare request to refresh the token
+    (let* ((token-url "https://ticktick.com/oauth/token")
+           (authorization (concat "Basic "
+                                  (base64-encode-string
+                                   (concat tickel-client-id ":" tickel-client-secret)
+                                   t)))
+           (url-request-method "POST")
+           (url-request-extra-headers `(("Authorization" . ,authorization)
+                                        ("Content-Type" . "application/x-www-form-urlencoded")))
+           (refresh-token (plist-get tickel-token :refresh_token))
+           (url-request-data (mapconcat
+                              (lambda (kv)
+                                (concat (url-hexify-string (car kv)) "=" (url-hexify-string (cdr kv))))
+                              `(("grant_type" . "refresh_token")
+                                ("refresh_token" . ,refresh-token)
+                                ("redirect_uri" . ,tickel-redirect-uri)
+                                ("scope" . ,tickel-auth-scopes))
+                              "&"))
+           response token-data)
+      (with-current-buffer (url-retrieve-synchronously token-url t t)
+        (goto-char url-http-end-of-headers)
+        (setq response (buffer-substring-no-properties (point) (point-max)))
+        (kill-buffer (current-buffer)))
+      (let ((json-object-type 'plist))
+        (setq token-data (json-read-from-string response)))
+      (if (plist-get token-data :access_token)
+          (progn
+            (setq tickel-token token-data)
+            (message "Token refreshed!"))
+        (message "Failed to refresh token.")))))
