@@ -186,7 +186,16 @@ DATA is an alist of data to send with the request."
       (message "HTTP Error %s: %s" status response)
       nil))))
 
-;; tickel-get-projects
+(defun tickel-get-projects ()
+  "Retrieve the list of projects from TickTick."
+  (interactive)
+  (let ((projects (tickel-request "GET" "/open/v1/project")))
+    (if projects
+        (progn
+          (message "Projects retrieved successfully.")
+          projects)
+      (message "Failed to retrieve projects.")
+      nil)))
 
 ;; tickel-get-tasks
 
