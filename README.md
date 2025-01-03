@@ -1,8 +1,11 @@
 # Tick.el
-`tick.el` is a simple emacs package (work-in-progress) that will (eventually):
+`tick.el` is a package (work-in-progress) allowing Emacs to interface with [TickTick](https://ticktick.com), a task management app.
+
+Planned features:
  - fetch tasks from TickTick
- - create, update, and delete tasks on TickTick server using dedicated tick.el buffer
- - sync TODO headings in org files with TickTick lists (projects)
+ - create, update, and delete tasks on TickTick
+ - sync specific TODO headings in an org file
+ - sync entire org-agenda files
 
 ## To-do list
 - [x] OAuth2 authorization
