@@ -1,40 +1,10 @@
 (require 'oauth2)
+(require 'json)
+(require 'url)
+(require 'seq)
+(require 'tabulated-list)
 
 (defgroup ticktick nil
-  "Settings for TickTick API"
-  :prefix "ticktick-"
-  :group 'applications)
-
-(defcustom ticktick-client-id "uxXCDqEv3nV3C2M1hn"
-  "OAuth2 client ID for TickTick"
-  :type 'string
-  :group 'ticktick)
-
-(defcustom ticktick-client-secret "6eh+gE#66+3lKHJv56d)EU8&eru_k$*8"
-  "OAuth2 client secret for TickTick"
-  :type 'string
-  :safe #'stringp
-  :group 'ticktick)
-
-(defcustom ticktick-redirect-uri "http://localhost"
-  "OAuth2 redirect URI for TickTick."
-  :type 'string
-  :group 'ticktick)
-
-(defvar oauth2-ticktick-token nil)
-
-(defun ticktick-authenticate ()
-  "Authenticate tick.el via OAuth2 with TickTick API."
-  (setq oauth2-ticktick-token
-        (oauth2-auth-and-store 
-         "https://ticktick.com/oauth/authorize"
-         "https://ticktick.com/oauth/token"
-         "tasks:read tasks:write"
-         ticktick-client-id
-         ticktick-client-secret
-         ticktick-redirect-uri)))
-
-(defgroup tickel nil
   "Interface with TickTick API."
   :prefix "tickel-"
   :group 'applications)
@@ -46,6 +16,7 @@
 
 (defcustom tickel-client-secret "6eh+gE#66+3lKHJv56d)EU8&eru_k$*8"
   "TickTick client secret."
+  
   :type 'string
   :group 'tickel)
 
@@ -60,6 +31,16 @@
 (defvar tickel-token nil
   "Access token for accessing the TickTick API.
 This is a plist containing token information.")
+
+(defcustom tickel-task-file-mapping nil
+  "An alist mapping TickTick task IDs to file paths and optional Org headings for syncing tasks.
+Each entry is a cons cell where the car is the TickTick task ID (string),
+and the cdr is a cons cell of the file path (string) and optional Org heading (string)."
+  :type '(alist :key-type (string :tag "Task ID")
+                :value-type (cons (file :tag "File Path")
+                                  (choice (const :tag "No specific heading" nil)
+                                          (string :tag "Org Heading"))))
+  :group 'tickel)
 
 (defun tickel-authorize ()
   "Authorize tick.el with TickTick and obtain an access token."
@@ -113,7 +94,9 @@ This is a plist containing token information.")
     (let ((json-object-type 'plist))
       (setq token-data (json-read-from-string response)))
     (if (plist-get token-data :access_token)
-        token-data
+        (progn
+          (plist-put token-data :created_at (float-time))
+          token-data)
       nil)))
 
 (defun tickel-refresh-token ()
@@ -147,6 +130,7 @@ This is a plist containing token information.")
         (setq token-data (json-read-from-string response)))
       (if (plist-get token-data :access_token)
           (progn
+            (plist-put token-data :created_at (float-time))
             (setq tickel-token token-data)
             (message "Token refreshed!"))
         (message "Failed to refresh token.")))))
@@ -189,7 +173,8 @@ DATA is an alist of data to send with the request."
       ;; Success: parse the JSON response
       (if (string-blank-p response)
           nil
-        (let ((json-object-type 'plist))
+        (let ((json-object-type 'plist)
+              (json-array-type 'list))
           (json-read-from-string response))))
      ((= status 401)
       ;; Unauthorized: Try refreshing the token
@@ -214,46 +199,197 @@ DATA is an alist of data to send with the request."
 
 (defun tickel-get-tasks (project-id)
   "Retrieve the list of tasks for PROJECT-ID from TickTick."
-  (interactive "sProject ID: ")
+  ;; Note: Some projects may not have tasks; handle accordingly
   (let* ((endpoint (format "/open/v1/project/%s/data" project-id))
          (data (tickel-request "GET" endpoint)))
     (if data
         (let ((tasks (plist-get data :tasks)))
-          (message "Tasks retrieved successfully.")
           tasks)
-      (message "Failed to retrieve tasks.")
       nil)))
 
-(defun tickel-create-task (project-id title &optional content)
-  "Create a new task with TITLE in the project with PROJECT-ID.
-Optional argument CONTENT is the task content."
-  (interactive "sProject ID: \nsTask Title: \nsTask Content (optional): ")
-  (let ((data `(("title" . ,title)
-                ("projectId" . ,project-id)
-                ,@(when content `(("content" . ,content))))))
-    (let ((result (tickel-request "POST" "/open/v1/task" data)))
-      (if result
-          (message "Task '%s' created in project '%s'." title project-id)
-        (message "Failed to create task.")))))
+(defun tickel-format-org-deadline (ticktick-date)
+  "Convert a TickTick date to Org mode format.
+Input date format: YYYY-MM-DDTHH:MM:SS.sss+ZZZZ
+Output Org format: <YYYY-MM-DD>"
+  (when (and ticktick-date (string-match "^\\([0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\)" ticktick-date))
+    (format "<%s>" (match-string 1 ticktick-date))))
 
-(defun tickel-update-task (task-id project-id updates)
-  "Update the task with TASK-ID in PROJECT-ID using UPDATES alist.
-UPDATES should be an alist of fields to update."
-  (let ((endpoint (format "/open/v1/task/%s" task-id))
-        (data (append `(("id" . ,task-id)
-                        ("projectId" . ,project-id))
-                      updates)))
-    (let ((result (tickel-request "POST" endpoint data)))
-      (if result
-          (message "Task '%s' updated." task-id)
-        (message "Failed to update task.")))))
+;; Variables to keep track of original buffer and tasks
+(defvar tickel-original-buffer nil
+  "The buffer from which `tickel-sync-project-tasks' was called.")
 
-(defun tickel-delete-task (project-id task-id)
-  "Delete the task with TASK-ID from PROJECT-ID."
-  (interactive "sProject ID: \nsTask ID: ")
-  (let ((endpoint (format "/open/v1/project/%s/task/%s" project-id task-id)))
-    (let ((result (tickel-request "DELETE" endpoint)))
-      (if result
-          (message "Task '%s' deleted from project '%s'." task-id project-id)
-        (message "Failed to delete task.")))))
+(defvar tickel-projects nil
+  "List of projects.")
 
+(defvar tickel-tasks-data nil
+  "List of tasks data retrieved from TickTick, with project information.")
+
+;; Define tickel-sync-mode
+(define-derived-mode tickel-sync-mode tabulated-list-mode "Tickel-Sync"
+  "Major mode for displaying TickTick tasks and selecting them for import."
+  (setq tabulated-list-format [("Mark" 5 t)
+                               ("Title" 30 t)
+                               ("Project" 20 t)
+                               ("ID" 24 t)
+                               ("Status" 6 t)
+                               ("Due Date" 12 t)])
+  (setq tabulated-list-padding 2)
+  (setq tabulated-list-entries nil)
+  (setq tabulated-list--tag-column 0)
+  (tabulated-list-init-header)
+  ;; Define keybindings
+  (define-key tickel-sync-mode-map (kbd "m") 'tickel-mark)
+  (define-key tickel-sync-mode-map (kbd "u") 'tickel-unmark)
+  (define-key tickel-sync-mode-map (kbd "x") 'tickel-import-marked-tasks)
+  (define-key tickel-sync-mode-map (kbd "q") 'quit-window)
+  (setq-local revert-buffer-function 'tickel--refresh-task-buffer))
+
+(defun tickel--make-tabulated-list-entries (tasks)
+  "Create tabulated list entries from TASKS."
+  (mapcar (lambda (task)
+            (let* ((id (plist-get task :id))
+                   (title (plist-get task :title))
+                   (project-name (plist-get task :projectName))
+                   (status (number-to-string (plist-get task :status)))
+                   (due-date (or (tickel-format-org-deadline (plist-get task :dueDate)) ""))
+                   (cols (vector " " title project-name id status due-date))) ; Mark column starts as " "
+              (list id cols)))
+          tasks))
+
+(defun tickel--refresh-task-buffer (&rest _args)
+  "Refresh the task list."
+  (let ((tasks (tickel--fetch-all-tasks))
+        (pos (point)))
+    (setq tickel-tasks-data tasks)
+    (setq tabulated-list-entries (tickel--make-tabulated-list-entries tasks))
+    (tabulated-list-print t)
+    (goto-char pos)))
+
+(defun tickel--fetch-all-tasks ()
+  "Fetch tasks from all projects and combine them with project information."
+  (setq tickel-projects (tickel-get-projects))
+  (let (all-tasks)
+    (dolist (project tickel-projects)
+      (let* ((project-id (plist-get project :id))
+             (project-name (plist-get project :name))
+             (tasks (tickel-get-tasks project-id)))
+        (dolist (task tasks)
+          ;; Add project name to each task
+          (plist-put task :projectName project-name)
+          ;; Add project ID to each task (already present)
+          (push task all-tasks))))
+    ;; Return the combined list of tasks
+    (nreverse all-tasks)))
+
+(defun tickel-sync-project-tasks ()
+  "Display tasks from all TickTick projects, allowing selection for import."
+  (interactive)
+  (setq tickel-original-buffer (current-buffer))
+  (let* ((tasks (tickel--fetch-all-tasks))
+         (buf (get-buffer-create "*Tickel Tasks*")))
+    (setq tickel-tasks-data tasks)
+    (with-current-buffer buf
+      (tickel-sync-mode)
+      (setq tabulated-list-entries (tickel--make-tabulated-list-entries tasks))
+      ;; Sort entries by project name
+      (setq tabulated-list-sort-key (cons "Project" nil))
+      (tabulated-list-print))
+    (pop-to-buffer buf)))
+
+(defun tickel-mark ()
+  "Mark the task at point for import."
+  (interactive)
+  (let* ((inhibit-read-only t)
+         (id (tabulated-list-get-id))          ; Get the task ID
+         (entry (assq id tabulated-list-entries))) ; Find the corresponding entry
+    (when entry
+      ;; Set the mark in the entry vector itself
+      (aset (cadr entry) 0 "*")
+      ;; Refresh the display for the current line
+      (tabulated-list-set-col 0 "*"))
+    (forward-line 1)))
+
+(defun tickel-unmark ()
+  "Unmark the task at point."
+  (interactive)
+  (let* ((inhibit-read-only t)
+         (id (tabulated-list-get-id))          ; Get the task ID
+         (entry (assq id tabulated-list-entries))) ; Find the corresponding entry
+    (when entry
+      ;; Remove the mark in the entry vector itself
+      (aset (cadr entry) 0 " ")
+      ;; Refresh the display for the current line
+      (tabulated-list-set-col 0 " "))
+    (forward-line 1)))
+
+(defun tickel--get-marked-tasks ()
+  "Return list of IDs of marked tasks."
+  (let (marked-tasks)
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (let ((entry (tabulated-list-get-entry)))
+          ;; Check if the mark is set
+          (when (and entry (string= (aref entry 0) "*"))
+            (push (tabulated-list-get-id) marked-tasks)))
+        (forward-line 1)))
+    marked-tasks))
+
+(defun tickel-import-marked-tasks ()
+  "Import the marked tasks into the original buffer."
+  (interactive)
+  (let ((marked-task-ids (tickel--get-marked-tasks)))
+    (if (null marked-task-ids)
+        (message "No tasks marked.")
+      (let ((tasks-to-insert (seq-filter (lambda (task)
+                                           (member (plist-get task :id) marked-task-ids))
+                                         tickel-tasks-data)))
+        (with-current-buffer tickel-original-buffer
+          (save-excursion
+            (dolist (task tasks-to-insert)
+              (tickel--insert-task-into-buffer task))))
+        ;; Update tickel-task-file-mapping
+        (dolist (task tasks-to-insert)
+          (tickel--update-task-file-mapping task (buffer-file-name tickel-original-buffer)))
+        (message "Imported %d tasks." (length tasks-to-insert))
+        ;; Close the tasks buffer
+        (quit-window)))))
+
+(defun tickel--insert-task-into-buffer (task)
+  "Insert TASK into current buffer in Org format."
+  (let* ((task-title (plist-get task :title))
+         (task-id (plist-get task :id))
+         (task-content (plist-get task :content))
+         (task-project-id (plist-get task :projectId))
+         (task-project-name (plist-get task :projectName))
+         (task-status (plist-get task :status))
+         (task-due-date (tickel-format-org-deadline (plist-get task :dueDate)))
+         (task-is-completed (eq (plist-get task :status) 2)) ; Assuming status 2 is completed
+         (todo-state (if task-is-completed "DONE" "TODO")))
+    (org-back-to-heading t)
+    (org-end-of-subtree t t)  ; Move to the end of the current subtree
+    (org-insert-heading-respect-content)
+    (insert (format "%s %s\n" todo-state task-title))
+    (when task-due-date
+      (insert (format "DEADLINE: %s\n" task-due-date)))
+    (insert ":PROPERTIES:\n")
+    (insert (format ":ticktick-task-id: %s\n" task-id))
+    (when task-project-id
+      (insert (format ":ticktick-project-id: %s\n" task-project-id)))
+    (when task-project-name
+      (insert (format ":ticktick-project-name: %s\n" task-project-name)))
+    (when task-status
+      (insert (format ":ticktick-status: %s\n" task-status)))
+    (insert ":END:\n")
+    (when task-content
+      (insert (format "%s\n" task-content)))))
+
+(defun tickel--update-task-file-mapping (task file &optional heading)
+  "Update `tickel-task-file-mapping' with TASK and FILE, and optional HEADING."
+  (let ((task-id (plist-get task :id)))
+    ;; Remove any existing mapping for this task ID
+    (setq tickel-task-file-mapping (assq-delete-all task-id tickel-task-file-mapping))
+    ;; Add the new mapping
+    (add-to-list 'tickel-task-file-mapping
+                 (cons task-id
+                       (cons file heading)))))
