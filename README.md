@@ -1,5 +1,5 @@
-# tick.el
-`tick.el` is a package (work-in-progress) allowing Emacs to interface with [TickTick](https://ticktick.com), a task management app.
+ticktick.el
+`ticktick.el` is a package (work-in-progress) allowing Emacs to interface with [TickTick](https://ticktick.com), a task management app.
 
 Planned features:
  - fetch tasks from TickTick
@@ -10,11 +10,12 @@ Planned features:
 ## To-do list
 - [x] OAuth2 authorization
 - [x] API request
-- [x] ticktick-get-projects
-- [x] ticktick-get-tasks
-- [x] ticktick-create-task
-- [ ] tickel major mode
-- [ ] ticktick-update-task (includes completing tasks)
-- [ ] ticktick-delete-task
-- [ ] ticktick-sync
+- [x] get projects
+- [x] get tasks
+- [x] create tasks
+- [x] one-way sync
+      
+- [ ] archive/delete task (what happens on other devices?)
+- [ ] sync - conflicts?
+- [ ] major mode?
 

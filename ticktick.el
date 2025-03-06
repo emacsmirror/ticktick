@@ -10,36 +10,59 @@
   :prefix "ticktick-"
   :group 'applications)
 
-(defcustom ticktick-client-id "uxXCDqEv3nV3C2M1hn"
+(defcustom ticktick-client-id ""
   "TickTick client ID."
   :type 'string
   :group 'ticktick)
 
-(defcustom ticktick-client-secret "6eh+gE#66+3lKHJv56d)EU8&eru_k$*8"
+(defcustom ticktick-client-secret ""
   "TickTick client secret."
   :type 'string
   :group 'ticktick)
 
-(defcustom ticktick-auth-scopes "tasks:write tasks:read"
+(defcustom ticktick-auth-scope "tasks:write tasks:read"
   "Space-separated scopes for TickTick API access."
   :type 'string
   :group 'ticktick)
 
-(defvar ticktick-redirect-uri "http://localhost"
-  "The redirect URI registered with TickTick.")
-
-(defvar ticktick-token nil
-  "Access token for accessing the TickTick API.
-This is a plist containing token information.")
-
-(defcustom ticktick-sync-file "~/org/ticktick.org"
-  "File path where all TickTick tasks will be synced."
+(defcustom ticktick-token-file (concat user-emacs-directory "org-gcal/")
+  "Location of file storing token"
   :type 'file
   :group 'ticktick)
 
-(defcustom ticktick-sync-interval 600
-  "Interval in seconds between automatic syncs with TickTick (default: 10 minutes)."
-  :type 'integer
+(defcustom ticktick-auto-fetch-new-tasks-from-server nil
+  "Whether ticktick.el should automatically fetch new
+objects from the server."
+  :type 'boolean
+  :group 'ticktick)
+
+(defcustom ticktick-sync-mode "down"
+  :type 'string
+  :group 'ticktick)
+
+(defcustom ticktick-sync-files ("~/org/ticktick.org")
+   "Association list of file path(s) where tasks under a TickTick project should be
+imported '(project-id file)."
+  :type 'file
+  :group 'ticktick)
+
+(defcustom ticktick-)
+
+(defcustom ticktick-files-alist nil
+  "Association list of  '(project-id file). For each project-id, ‘ticktick-fetch’
+and ‘ticktick-sync’ will retrieve new tasks and events and insert them into the
+file."
+  :group 'ticktick
+  :type '(alist :key-type (string :tag "project-id") :value-type (file :tag "Org file")))
+
+(defvar ticktick-token nil
+  "Access token for accessing the TickTick API."
+  :type 'string
+  :group 'ticktick)
+
+(defvar ticktick-redirect-uri "http://localhost"
+  "The redirect URI registered with TickTick."
+  :type 'string
   :group 'ticktick)
 
 (defvar ticktick-sync-timer nil
