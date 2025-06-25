@@ -25,8 +25,8 @@
   :type 'string
   :group 'ticktick)
 
-(defcustom ticktick-token-file (concat user-emacs-directory "org-gcal/")
-  "Location of file storing token"
+(defcustom ticktick-token-file ""
+  "File where the TickTick OAuth token is stored."
   :type 'file
   :group 'ticktick)
 
@@ -36,7 +36,7 @@ objects from the server."
   :type 'boolean
   :group 'ticktick)
 
-(defcustom ticktick-org-sync-file "~/org/ticktick.org"
+(defcustom ticktick-org-sync-file ""
   "Path to the org file where all TickTick tasks will be synchronized."
   :type 'file
   :group 'ticktick)
@@ -55,7 +55,7 @@ objects from the server."
 (defvar ticktick-sync-timer nil
   "Timer object for automatic syncing.")
 
-;;; Authorization functions (unchanged)
+;;; Authorization functions
 ;;;###autoload
 (defun ticktick-authorize ()
   "Authorize tick.el with TickTick and obtain an access token."
@@ -85,7 +85,7 @@ objects from the server."
       (message "Failed to obtain access token."))))
 
 (defun ticktick--exchange-code-for-token (code authorization)
-  "Exchange the authorization CODE for an access token using AUTHORIZATION header."
+  "Exchange the authorization code for an access token using AUTHORIZATION header."
   (let* ((token-url "https://ticktick.com/oauth/token")
          (url-request-method "POST")
          (url-request-extra-headers `(("Authorization" . ,authorization)
@@ -155,7 +155,7 @@ objects from the server."
     (ticktick-refresh-token)))
 
 (defun ticktick--token-expired-p (token)
-  "Check if TOKEN has expired."
+  "Check if token has expired."
   (let ((expires-in (plist-get token :expires_in))
         (created-at (plist-get token :created_at)))
     (if (and expires-in created-at)
@@ -198,7 +198,7 @@ DATA is an alist of data to send with the request."
      nil)))
 
 (defun ticktick--task-to-heading (task)
-  "Convert a TickTick TASK to an org heading."
+  "Convert a TickTick task to an org heading."
   (let* ((id (plist-get task :id))
          (title (plist-get task :title))
          (content (plist-get task :content))
@@ -299,7 +299,7 @@ Creates new tasks if missing a :TICKTICK_ID:, and updates existing ones."
   (interactive)
   (ticktick-fetch-to-org)
   (ticktick-push-from-org)
-  (message "✅ TickTick sync complete."))
+  (message "TickTick sync complete."))
 
 
 ;;;###autoload
