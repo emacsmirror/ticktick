@@ -36,24 +36,11 @@ objects from the server."
   :type 'boolean
   :group 'ticktick)
 
-(defcustom ticktick-sync-mode "down"
-  :type 'string
-  :group 'ticktick)
-
-(defcustom ticktick-sync-files ("~/org/ticktick.org")
-   "Association list of file path(s) where tasks under a TickTick project should be
-imported '(project-id file)."
+(defcustom ticktick-org-sync-file "~/org/ticktick.org"
+  "Path to the org file where all TickTick tasks will be synchronized."
   :type 'file
   :group 'ticktick)
 
-(defcustom ticktick-)
-
-(defcustom ticktick-files-alist nil
-  "Association list of  '(project-id file). For each project-id, ‘ticktick-fetch’
-and ‘ticktick-sync’ will retrieve new tasks and events and insert them into the
-file."
-  :group 'ticktick
-  :type '(alist :key-type (string :tag "project-id") :value-type (file :tag "Org file")))
 
 (defvar ticktick-token nil
   "Access token for accessing the TickTick API."
@@ -259,41 +246,61 @@ DATA is an alist of data to send with the request."
                                  (org-element-property :contents-end element))))))))
 
 ;;;###autoload
-(defun ticktick-fetch ()
-  "Fetch all tasks from TickTick and update the sync file."
+(defun ticktick-fetch-to-org ()
+  "Fetch all tasks from TickTick and write them to `ticktick-org-sync-file`,
+organized by project."
   (interactive)
   (let ((projects (ticktick-request "GET" "/open/v1/project")))
-    (with-current-buffer (find-file-noselect ticktick-sync-file)
+    (with-current-buffer (find-file-noselect ticktick-org-sync-file)
       (org-with-wide-buffer
-       (erase-buffer)  ; Start fresh
+       (erase-buffer)
        (dolist (project projects)
          (let* ((project-id (plist-get project :id))
                 (project-name (plist-get project :name))
                 (project-data (ticktick-request "GET" (format "/open/v1/project/%s/data" project-id)))
                 (tasks (plist-get project-data :tasks)))
            ;; Insert project heading
-           (insert (format "* %s\n:PROPERTIES:\n:TICKTICK_PROJECT_ID: %s\n:END:\n\n" 
-                         project-name project-id))
-           ;; Insert all tasks under this project
+           (insert (format "* %s\n:PROPERTIES:\n:TICKTICK_PROJECT_ID: %s\n:END:\n\n"
+                           project-name project-id))
+           ;; Insert tasks
            (dolist (task tasks)
              (insert (ticktick--task-to-heading task)))))
        (save-buffer)))))
 
 ;;;###autoload
-(defun ticktick-sync ()
-  "Sync tasks between local file and TickTick server."
+(defun ticktick-push-from-org ()
+  "Push org tasks from `ticktick-org-sync-file` to TickTick.
+Creates new tasks if missing a :TICKTICK_ID:, and updates existing ones."
   (interactive)
-  (ticktick-fetch)
-  (with-current-buffer (find-file-noselect ticktick-sync-file)
+  (with-current-buffer (find-file-noselect ticktick-org-sync-file)
     (org-with-wide-buffer
      (goto-char (point-min))
      (while (outline-next-heading)
-       (unless (org-entry-get nil "TICKTICK_PROJECT_ID")  ; Skip project headings
-         (when-let ((id (org-entry-get nil "TICKTICK_ID")))
+       (let ((level (org-current-level)))
+         (when (and (= level 2) ;; subheading = task
+                    (not (org-entry-get nil "TICKTICK_PROJECT_ID"))) ; skip project headings
            (let* ((task (ticktick--heading-to-task))
-                  (project-id (org-entry-get nil "TICKTICK_PROJECT_ID" t)))  ; Get inherited property
-             (ticktick-request "POST" (format "/open/v1/task/%s" id) 
-                           (append task `(("projectId" . ,project-id)))))))))))
+                  (project-id (org-entry-get nil "TICKTICK_PROJECT_ID" t)) ; inherited
+                  (id (alist-get "id" task nil nil #'string=)))
+             (if (and id (not (string-empty-p id)))
+                 ;; Update existing task
+                 (ticktick-request "POST" (format "/open/v1/task/%s" id)
+                                   (append task `(("projectId" . ,project-id))))
+               ;; Create new task
+               (let ((response (ticktick-request "POST" "/open/v1/task"
+                                                 (append task `(("projectId" . ,project-id))))))
+                 (when response
+                   (org-set-property "TICKTICK_ID" (plist-get response :id))
+                   (message "Created task: %s" (plist-get response :title))))))))))))
+
+;;;###autoload
+(defun ticktick-sync-two-way ()
+  "Two-way sync between TickTick and `ticktick-org-sync-file`."
+  (interactive)
+  (ticktick-fetch-to-org)
+  (ticktick-push-from-org)
+  (message "✅ TickTick sync complete."))
+
 
 ;;;###autoload
 (defun ticktick-create-task ()
