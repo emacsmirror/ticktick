@@ -20,12 +20,13 @@
   :type 'string
   :group 'ticktick)
 
-(defcustom ticktick-auth-scope "tasks:write tasks:read"
+(defcustom ticktick-auth-scopes "tasks:write tasks:read"
   "Space-separated scopes for TickTick API access."
   :type 'string
   :group 'ticktick)
 
-(defcustom ticktick-token-file ""
+(defcustom ticktick-token-file
+  (expand-file-name ".ticktick-token" org-gcal-dir)
   "File where the TickTick OAuth token is stored."
   :type 'file
   :group 'ticktick)
@@ -36,21 +37,23 @@ objects from the server."
   :type 'boolean
   :group 'ticktick)
 
-(defcustom ticktick-org-sync-file ""
+(defcustom ticktick-dir
+  (concat user-emacs-directory "ticktick/")
+  "File in which to save token."
+  :group 'org-gcal
+  :type 'string)
+
+(defcustom ticktick-sync-file (expand-file-name "ticktick.org" org-gcal-dir)
   "Path to the org file where all TickTick tasks will be synchronized."
   :type 'file
   :group 'ticktick)
 
-
 (defvar ticktick-token nil
-  "Access token for accessing the TickTick API."
-  :type 'string
-  :group 'ticktick)
+  "Access token for accessing the TickTick API.")
+
 
 (defvar ticktick-redirect-uri "http://localhost"
-  "The redirect URI registered with TickTick."
-  :type 'string
-  :group 'ticktick)
+  "The redirect URI registered with TickTick.")
 
 (defvar ticktick-sync-timer nil
   "Timer object for automatic syncing.")
@@ -247,11 +250,11 @@ DATA is an alist of data to send with the request."
 
 ;;;###autoload
 (defun ticktick-fetch-to-org ()
-  "Fetch all tasks from TickTick and write them to `ticktick-org-sync-file`,
+  "Fetch all tasks from TickTick and write them to `ticktick-sync-file`,
 organized by project."
   (interactive)
   (let ((projects (ticktick-request "GET" "/open/v1/project")))
-    (with-current-buffer (find-file-noselect ticktick-org-sync-file)
+    (with-current-buffer (find-file-noselect ticktick-sync-file)
       (org-with-wide-buffer
        (erase-buffer)
        (dolist (project projects)
@@ -269,10 +272,10 @@ organized by project."
 
 ;;;###autoload
 (defun ticktick-push-from-org ()
-  "Push org tasks from `ticktick-org-sync-file` to TickTick.
+  "Push org tasks from `ticktick-sync-file` to TickTick.
 Creates new tasks if missing a :TICKTICK_ID:, and updates existing ones."
   (interactive)
-  (with-current-buffer (find-file-noselect ticktick-org-sync-file)
+  (with-current-buffer (find-file-noselect ticktick-sync-file)
     (org-with-wide-buffer
      (goto-char (point-min))
      (while (outline-next-heading)
@@ -295,7 +298,7 @@ Creates new tasks if missing a :TICKTICK_ID:, and updates existing ones."
 
 ;;;###autoload
 (defun ticktick-sync-two-way ()
-  "Two-way sync between TickTick and `ticktick-org-sync-file`."
+  "Two-way sync between TickTick and `ticktick-sync-file`."
   (interactive)
   (ticktick-fetch-to-org)
   (ticktick-push-from-org)
