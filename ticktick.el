@@ -27,20 +27,14 @@
 
 (defcustom ticktick-dir
   (concat user-emacs-directory "ticktick/")
-  "File in which to save token."
+  "Folder in which to save token."
   :group 'ticktick
   :type 'string)
 
 (defcustom ticktick-token-file
   (expand-file-name ".ticktick-token" ticktick-dir)
-  "File where the TickTick OAuth token is stored."
+  "File in which to store TickTick OAuth token."
   :type 'file
-  :group 'ticktick)
-
-(defcustom ticktick-auto-fetch-new-tasks-from-server nil
-  "Whether ticktick.el should automatically fetch new
-objects from the server."
-  :type 'boolean
   :group 'ticktick)
 
 (defcustom ticktick-sync-file (expand-file-name "ticktick.org" ticktick-dir)
@@ -56,12 +50,8 @@ objects from the server."
 (defvar ticktick-token nil
   "Access token for accessing the TickTick API.")
 
-
 (defvar ticktick-redirect-uri "http://localhost"
   "The redirect URI registered with TickTick.")
-
-(defvar ticktick-sync-timer nil
-  "Timer object for automatic syncing.")
 
 ;;; Authorization functions
 ;;;###autoload
