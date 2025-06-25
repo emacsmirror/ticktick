@@ -353,5 +353,9 @@ Creates new tasks if missing a :TICKTICK_ID:, and updates existing ones."
       (org-set-property "TICKTICK_ID" (plist-get response :id))
       (message "Task created successfully!"))))
 
+(add-hook 'focus-out-hook #'ticktick--maybe-auto-sync)
+(add-hook 'window-buffer-change-functions
+          (lambda (&rest _) (ticktick--maybe-auto-sync)))
+
 (provide 'ticktick)
 ;;; ticktick.el ends here
