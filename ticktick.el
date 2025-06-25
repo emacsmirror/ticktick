@@ -202,26 +202,24 @@ DATA is an alist of data to send with the request."
 
 (defun ticktick--task-to-heading (task)
   "Convert a TickTick task to an org heading."
-  (let* ((id (plist-get task :id))
-         (title (plist-get task :title))
-         (content (plist-get task :content))
-         (status (plist-get task :status))
-         (due-date (plist-get task :dueDate))
-         (priority (plist-get task :priority)))
+  (let ((id (plist-get task :id))
+        (title (plist-get task :title))
+        (status (plist-get task :status))
+        (priority (plist-get task :priority))
+        (due (plist-get task :dueDate))
+        (updated (plist-get task :updatedTime))
+        (content (plist-get task :content)))
     (concat "** " (if (= status 2) "DONE" "TODO")
-            (pcase priority
-              (5 " [#A]")
-              (3 " [#B]")
-              (1 " [#C]")
-              (_ ""))
-            " " title
-            (when due-date
-              (concat "\nDEADLINE: "
-                     (format-time-string "<%Y-%m-%d %a>"
-                                       (date-to-time due-date))))
-            "\n:PROPERTIES:\n:TICKTICK_ID: " id "\n:END:\n"
-            (when content
-              (concat (replace-regexp-in-string "\\*" "\\\\*" content) "\n")))))
+            (pcase priority (5 " [#A]") (3 " [#B]") (1 " [#C]") (_ ""))
+            " " title "\n"
+            (when due
+              (concat "DEADLINE: "
+                      (format-time-string "<%Y-%m-%d %a>" (date-to-time due)) "\n"))
+            ":PROPERTIES:\n"
+            ":TICKTICK_ID: " id "\n"
+            ":REMOTE_UPDATED: " updated "\n"
+            ":END:\n"
+            (when content (concat content "\n")))))
 
 (defun ticktick--heading-to-task ()
   "Convert org heading at point to a TickTick task."
@@ -247,6 +245,44 @@ DATA is an alist of data to send with the request."
                      (string-trim (buffer-substring-no-properties
                                  content
                                  (org-element-property :contents-end element))))))))
+
+(defun ticktick--should-sync-p ()
+  "Return t if the task at point should be synced to TickTick.
+Skips push if remote task is newer. Warns if both sides changed."
+  (let* ((last-synced (org-entry-get nil "LAST_SYNCED"))
+         (remote-updated (org-entry-get nil "REMOTE_UPDATED"))
+         (hash (org-entry-get nil "SYNC_CACHE"))
+         (body (buffer-substring-no-properties
+                (org-entry-beginning-position)
+                (org-entry-end-position)))
+         (local-changed (not (string= hash (secure-hash 'sha1 body)))))
+    (cond
+     ;; No last sync? Always push
+     ((not last-synced) t)
+
+     ;; Remote task is newer than last sync, and local task changed too
+     ((and remote-updated
+           (time-less-p (date-to-time last-synced) (date-to-time remote-updated))
+           local-changed)
+      (message "Warning: Conflict. Org and TickTick both changed. Resolve manually.")
+      nil)
+
+     ;; Remote is newer, but local task didn't change
+     ((and remote-updated
+           (time-less-p (date-to-time last-synced) (date-to-time remote-updated)))
+      nil)
+
+     ;; Local task changed
+     (local-changed t)
+
+     ;; Nothing changed
+     (t nil))))
+
+(defun ticktick--update-sync-meta ()
+  (let ((body (buffer-substring-no-properties (org-entry-beginning-position)
+                                              (org-entry-end-position))))
+    (org-set-property "LAST_SYNCED" (format-time-string "%Y-%m-%dT%H:%M:%S%z"))
+    (org-set-property "SYNC_CACHE" (secure-hash 'sha1 body))))
 
 ;;;###autoload
 (defun ticktick-fetch-to-org ()
