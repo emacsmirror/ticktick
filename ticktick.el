@@ -196,188 +196,197 @@ DATA is an alist of data to send with the request."
      nil)))
 
 (defun ticktick--task-to-heading (task)
-  "Convert a TickTick task to a clean Org heading string."
+  "Convert TASK to org heading."
   (let ((id (plist-get task :id))
         (title (plist-get task :title))
         (status (plist-get task :status))
         (priority (plist-get task :priority))
         (due (plist-get task :dueDate))
-        (updated (plist-get task :modifiedTime))
+        (etag (plist-get task :etag))
         (content (plist-get task :content)))
-    (let ((clean-content (when content
-                           (string-trim
-                            ;; Strip any DEADLINE/PROPERTIES blocks from content
-                            (replace-regexp-in-string
-                             "^\\(DEADLINE:\\|:PROPERTIES:\\|:END:\\).*\n?" ""
-                             content)))))
-      (string-join
-       (delq nil
-             (list
-              (format "** %s%s %s"
-                      (if (= status 2) "DONE" "TODO")
-                      (pcase priority (5 " [#A]") (3 " [#B]") (1 " [#C]") (_ ""))
-                      title)
-              (when due
-                (format "DEADLINE: <%s>" (format-time-string "%Y-%m-%d %a" (date-to-time due))))
-              ":PROPERTIES:"
-              (format ":TICKTICK_ID: %s" id)
-              (format ":REMOTE_UPDATED: %s" (or updated ""))
-              ":END:"
-              clean-content))
-       "\n"))))
-
+    (string-join
+     (delq nil
+           (list
+            (format "** %s%s %s"
+                    (if (= status 2) "DONE" "TODO")
+                    (pcase priority (5 " [#A]") (3 " [#B]") (1 " [#C]") (_ ""))
+                    title)
+            (when due
+              (format "DEADLINE: <%s>" (format-time-string "%Y-%m-%d %a" (date-to-time due))))
+            ":PROPERTIES:"
+            (format ":TICKTICK_ID: %s" id)
+            (format ":TICKTICK_ETAG: %s" (or etag ""))
+            ":END:"
+            (when content (string-trim content))
+            ))
+     "\n")))
 
 (defun ticktick--heading-to-task ()
-  "Convert org heading at point to a TickTick task."
-  (let* ((element (org-element-at-point))
-         (title (org-element-property :title element))
-         (todo-type (org-element-property :todo-type element))
-         (priority (org-element-property :priority element))
-         (deadline (org-element-property :deadline element))
+  "Convert org heading at point to a TickTick task plist."
+  (let* ((el (org-element-at-point))
+         (title (org-element-property :title el))
+         (todo (org-element-property :todo-type el))
+         (priority (org-element-property :priority el))
+         (deadline (org-element-property :deadline el))
          (id (org-entry-get nil "TICKTICK_ID"))
-         (content (org-element-property :contents-begin element)))
+         (content
+          (save-excursion
+            (save-restriction
+              (org-narrow-to-subtree)
+              (goto-char (point-min))
+              ;; Skip heading
+              (forward-line)
+              ;; Skip planning lines (e.g. DEADLINE)
+              (while (looking-at org-planning-line-re)
+                (forward-line))
+              ;; Skip properties drawer
+              (when (looking-at ":PROPERTIES:")
+                (re-search-forward "^:END:" nil t)
+                (forward-line))
+              ;; Capture content
+              (string-trim (buffer-substring-no-properties (point) (point-max)))))))
     `(("id" . ,id)
       ("title" . ,title)
-      ("status" . ,(if (eq todo-type 'done) 2 0))
-      ("priority" . ,(pcase priority
-                      (?A 5)
-                      (?B 3)
-                      (?C 1)
-                      (_ 0)))
+      ("status" . ,(if (eq todo 'done) 2 0))
+      ("priority" . ,(pcase priority (?A 5) (?B 3) (?C 1) (_ 0)))
       ("dueDate" . ,(when deadline
                       (format-time-string "%Y-%m-%dT%H:%M:%S+0000"
-                                        (org-timestamp-to-time deadline))))
-      ("content" . ,(when content
-                     (string-trim (buffer-substring-no-properties
-                                 content
-                                 (org-element-property :contents-end element))))))))
+                                          (org-timestamp-to-time deadline))))
+      ("content" . ,content))))
+
 
 (defun ticktick--should-sync-p ()
-  "Return t if the task at point should be synced to TickTick.
-Skips push if remote task is newer. Warns if both sides changed."
-  (let* ((last-synced (org-entry-get nil "LAST_SYNCED"))
-         (remote-updated (org-entry-get nil "REMOTE_UPDATED"))
-         (hash (org-entry-get nil "SYNC_CACHE"))
+  "Should we sync task?"
+  (let* ((etag (org-entry-get nil "TICKTICK_ETAG"))
+         (cached (org-entry-get nil "SYNC_CACHE"))
          (body (buffer-substring-no-properties
                 (org-entry-beginning-position)
                 (org-entry-end-position)))
-         (local-changed (not (string= hash (secure-hash 'sha1 body)))))
+         (changed (not (string= cached (secure-hash 'sha1 body)))))
     (cond
-     ;; No last sync? Always push
-     ((not last-synced) t)
-
-     ;; Remote task is newer than last sync, and local task changed too
-     ((and remote-updated
-           (time-less-p (date-to-time last-synced) (date-to-time remote-updated))
-           local-changed)
-      (message "⚠️ Conflict: Org and TickTick both changed. Resolve manually.")
-      nil)
-
-     ;; Remote is newer, but local task didn't change
-     ((and remote-updated
-           (time-less-p (date-to-time last-synced) (date-to-time remote-updated)))
-      nil)
-
-     ;; Local task changed
-     (local-changed t)
-
-     ;; Nothing changed
+     ((not etag) t)
+     ((and changed) t)
      (t nil))))
 
 (defun ticktick--update-sync-meta ()
+  "Set sync hash and time."
   (let ((body (buffer-substring-no-properties (org-entry-beginning-position)
                                               (org-entry-end-position))))
     (org-set-property "LAST_SYNCED" (format-time-string "%Y-%m-%dT%H:%M:%S%z"))
     (org-set-property "SYNC_CACHE" (secure-hash 'sha1 body))))
 
-;;;###autoload
+;;; Sync functions
+(defun ticktick--find-task-under-project (project-heading id)
+  "Return position of task heading with ID under PROJECT-HEADING."
+  (save-excursion
+    (goto-char project-heading)
+    (catch 'found
+      (org-map-entries
+       (lambda ()
+         (when (string= (org-entry-get nil "TICKTICK_ID") id)
+           (throw 'found (point))))
+       nil 'tree)
+      nil)))
+
 (defun ticktick-fetch-to-org ()
-  "Fetch all tasks from TickTick and write them to `ticktick-sync-file`,
-organized by project. Wipes the file completely and rewrites everything."
+  "Fetch all tasks from TickTick and update org file without duplicating."
   (interactive)
   (let ((projects (ticktick-request "GET" "/open/v1/project")))
     (with-current-buffer (find-file-noselect ticktick-sync-file)
       (org-with-wide-buffer
-       (erase-buffer)
        (dolist (project projects)
          (let* ((project-id (plist-get project :id))
                 (project-name (plist-get project :name))
-                (project-data (ticktick-request "GET" (format "/open/v1/project/%s/data" project-id)))
-                (tasks (plist-get project-data :tasks)))
-           ;; Insert project heading
-           (insert (format "* %s\n:PROPERTIES:\n:TICKTICK_PROJECT_ID: %s\n:END:\n\n"
-                           project-name project-id))
-           ;; Insert each task
-           (dolist (task tasks)
-             (insert (ticktick--task-to-heading task))
-             (insert "\n"))))  ;; Ensure newline between tasks
-       (goto-char (point-min))
+                (project-heading-re (format "^\\* %s$" (regexp-quote project-name)))
+                (project-pos (save-excursion
+                               (goto-char (point-min))
+                               (when (re-search-forward project-heading-re nil t)
+                                 (match-beginning 0)))))
+           ;; Create project section if not found
+           (unless project-pos
+             (goto-char (point-max))
+             (insert (format "* %s\n:PROPERTIES:\n:TICKTICK_PROJECT_ID: %s\n:END:\n" project-name project-id))
+             (setq project-pos (point-at-bol)))
+           (goto-char project-pos)
+           (outline-show-subtree)
+           (let* ((project-data (ticktick-request "GET" (format "/open/v1/project/%s/data" project-id)))
+                  (tasks (plist-get project-data :tasks)))
+             (dolist (task tasks)
+               (let* ((id (plist-get task :id))
+                      (etag (plist-get task :etag))
+                      (existing-pos (ticktick--find-task-under-project project-pos id)))
+                 (if existing-pos
+                     ;; Update existing task if etag differs
+                     (save-excursion
+                       (goto-char existing-pos)
+                       (let ((existing-etag (org-entry-get nil "TICKTICK_ETAG")))
+                         (unless (string= existing-etag etag)
+                           (delete-region (org-entry-beginning-position)
+                                          (org-entry-end-position))
+                           (insert (ticktick--task-to-heading task))
+                           (ticktick--update-sync-meta))))
+                   ;; Only insert if it doesn't exist
+                   (save-excursion
+                     (goto-char project-pos)
+                     (outline-next-heading)
+                     (insert (ticktick--task-to-heading task) "\n")
+                     (ticktick--update-sync-meta))))))))
        (save-buffer)))))
 
-
-;;;###autoload
 (defun ticktick-push-from-org ()
-  "Push org tasks from `ticktick-sync-file` to TickTick.
-Creates new tasks if missing a :TICKTICK_ID:, and updates existing ones.
-Skips tasks that haven't changed since :LAST_SYNCED:."
+  "Push all updated org tasks back to TickTick."
   (interactive)
   (with-current-buffer (find-file-noselect ticktick-sync-file)
     (org-with-wide-buffer
      (goto-char (point-min))
      (while (outline-next-heading)
-       (let ((level (org-current-level)))
-         (when (and (= level 2)
-                    (not (org-entry-get nil "TICKTICK_PROJECT_ID")))  ; skip project headings
-           (when (ticktick--should-sync-p)
-             (let* ((task (ticktick--heading-to-task))
-                    (project-id (org-entry-get nil "TICKTICK_PROJECT_ID" t))
-                    (id (alist-get "id" task nil nil #'string=)))
-               (if (and id (not (string-empty-p id)))
-                   ;; Update
-                   (progn
-                     (ticktick-request "POST" (format "/open/v1/task/%s" id)
-                                       (append task `(("projectId" . ,project-id))))
-                     (ticktick--update-sync-meta)
-                     (message "Updated task: %s" (alist-get "title" task nil nil #'string=)))
-                 ;; Create
-                 (let ((response (ticktick-request "POST" "/open/v1/task"
-                                                   (append task `(("projectId" . ,project-id))))))
-                   (when response
-                     (org-set-property "TICKTICK_ID" (plist-get response :id))
-                     (ticktick--update-sync-meta)
-                     (message "Created task: %s" (plist-get response :title)))))))))))))
+       (when (and (= (org-current-level) 2)
+                  (not (org-entry-get nil "TICKTICK_PROJECT_ID")))
+         (when (ticktick--should-sync-p)
+           (let* ((task (ticktick--heading-to-task))
+                  (project-id (org-entry-get nil "TICKTICK_PROJECT_ID" t))
+                  (id (alist-get "id" task)))
+             (if (and id (not (string-empty-p id)))
+                 (progn
+                   (ticktick-request "POST" (format "/open/v1/task/%s" id)
+                                     (append task `(("projectId" . ,project-id))))
+                   (ticktick--update-sync-meta)
+                   (message "Updated: %s" (alist-get "title" task)))
+               (let ((resp (ticktick-request "POST" "/open/v1/task"
+                                             (append task `(("projectId" . ,project-id))))))
+                 (when resp
+                   (org-set-property "TICKTICK_ID" (plist-get resp :id))
+                   (org-set-property "TICKTICK_ETAG" (plist-get resp :etag))
+                   (ticktick--update-sync-meta)
+                   (message "Created: %s" (plist-get resp :title)))))))))))
 
-;;;###autoload
 (defun ticktick-sync-two-way ()
-  "Two-way sync between TickTick and `ticktick-sync-file`."
+  "Two-way sync: fetch and push."
   (interactive)
   (ticktick-fetch-to-org)
-  (ticktick-push-from-org)
-  (message "TickTick sync complete."))
+  (ticktick-push-from-org))
 
 (defun ticktick--autosync ()
-  "Autosync TickTick if `ticktick--autosync` is non-nil."
+  "Auto sync if enabled."
   (when ticktick--autosync
     (when (file-exists-p ticktick-sync-file)
-      (ignore-errors
-        (ticktick-sync-two-way)))))
+      (ignore-errors (ticktick-sync-two-way)))))
 
-
-;;;###autoload
+;;; Task creation
 (defun ticktick-create-task ()
-  "Create a new TickTick task from the org heading at point."
+  "Create new task from heading."
   (interactive)
-  (let* ((project-id (org-entry-get nil "TICKTICK_PROJECT_ID" t))  ; Get inherited property
+  (let* ((project-id (org-entry-get nil "TICKTICK_PROJECT_ID" t))
          (task (ticktick--heading-to-task))
-         (response (ticktick-request "POST" "/open/v1/task" 
+         (resp (ticktick-request "POST" "/open/v1/task"
                                  (append task `(("projectId" . ,project-id))))))
-    (when response
-      (org-set-property "TICKTICK_ID" (plist-get response :id))
-      (message "Task created successfully!"))))
+    (when resp
+      (org-set-property "TICKTICK_ID" (plist-get resp :id))
+      (org-set-property "TICKTICK_ETAG" (plist-get resp :etag))
+      (message "Created task: %s" (plist-get resp :title)))))
 
 (add-hook 'focus-out-hook #'ticktick--autosync)
-(add-hook 'window-buffer-change-functions
-          (lambda (&rest _) (ticktick--autosync)))
+(add-hook 'window-buffer-change-functions (lambda (&rest _) (ticktick--autosync)))
 
 (provide 'ticktick)
 ;;; ticktick.el ends here
