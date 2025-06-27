@@ -49,7 +49,7 @@ Run:
 M-x ticktick-authorize
 ```
 
-An authorization page will pop up in your browser. Extract the code parameter from the URL and enter it into the minibuffer prompt.
+An authorization page will pop up in your browser. Extract the code parameter from the URL (after '?code=')and enter it into the minibuffer prompt.
 
 ### 5. Sync
 

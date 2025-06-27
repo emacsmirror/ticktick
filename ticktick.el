@@ -83,7 +83,7 @@
       (message "Failed to obtain access token."))))
 
 (defun ticktick--exchange-code-for-token (code authorization)
-  "Exchange the authorization code for an access token using AUTHORIZATION header."
+  "Exchange the authorization code for an access token using authorization header."
   (let* ((token-url "https://ticktick.com/oauth/token")
          (url-request-method "POST")
          (url-request-extra-headers `(("Authorization" . ,authorization)
@@ -367,7 +367,7 @@ DATA is an alist of data to send with the request."
   (ticktick-push-from-org))
 
 (defun ticktick--autosync ()
-  "Auto sync if enabled."
+  "Autosync if enabled."
   (when ticktick--autosync
     (when (file-exists-p ticktick-sync-file)
       (ignore-errors (ticktick-sync-two-way)))))
