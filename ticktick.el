@@ -196,7 +196,7 @@ DATA is an alist of data to send with the request."
      nil)))
 
 (defun ticktick--task-to-heading (task)
-  "Convert TASK to org heading."
+  "Convert task to an org heading."
   (let ((id (plist-get task :id))
         (title (plist-get task :title))
         (status (plist-get task :status))
@@ -358,7 +358,7 @@ DATA is an alist of data to send with the request."
                    (org-set-property "TICKTICK_ID" (plist-get resp :id))
                    (org-set-property "TICKTICK_ETAG" (plist-get resp :etag))
                    (ticktick--update-sync-meta)
-                   (message "Created: %s" (plist-get resp :title)))))))))))
+                   (message "Created: %s" (plist-get resp :title))))))))))))
 
 (defun ticktick-sync-two-way ()
   "Two-way sync: fetch and push."
