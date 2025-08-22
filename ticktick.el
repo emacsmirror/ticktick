@@ -54,6 +54,61 @@
   "The redirect URI registered with TickTick.")
 
 ;;; Authorization functions
+
+(defun ticktick--start-callback-server ()
+  "Start the local OAuth callback server if not already running."
+  (setq httpd-port ticktick-httpd-port)
+  (unless (httpd-running-p)
+    (httpd-start)))
+
+;; The servlet name determines the path: /ticktick-callback
+(defservlet ticktick-callback text/plain (path query)
+  "Handle the TickTick OAuth redirect."
+  (let ((code  (cadr (assoc "code" query)))
+        (state (cadr (assoc "state" query))))
+    (cond
+     ((not (and code state))
+      (insert "Authentication failed: missing code/state."))
+     ((and ticktick-oauth-state (not (string= state ticktick-oauth-state)))
+      (insert "Authentication failed: invalid state."))
+     (t
+      (let ((tok (ticktick--exchange-code-for-token code (ticktick--authorization-header))))
+        (if tok
+            (progn
+              (setq ticktick-token tok)
+              (ticktick--save-token)
+              (insert "Authentication successful! You can close this window.")
+              (message "TickTick: authenticated successfully."))
+          (insert "Authentication failed while exchanging code.")
+          (message "TickTick: token exchange failed.")))))))
+
+(defun ticktick--start-callback-server ()
+  "Start the local OAuth callback server if not already running."
+  (setq httpd-port ticktick-httpd-port)
+  (unless (httpd-running-p)
+    (httpd-start)))
+
+;; The servlet name determines the path: /ticktick-callback
+(defservlet ticktick-callback text/plain (path query)
+  "Handle the TickTick OAuth redirect."
+  (let ((code  (cadr (assoc "code" query)))
+        (state (cadr (assoc "state" query))))
+    (cond
+     ((not (and code state))
+      (insert "Authentication failed: missing code/state."))
+     ((and ticktick-oauth-state (not (string= state ticktick-oauth-state)))
+      (insert "Authentication failed: invalid state."))
+     (t
+      (let ((tok (ticktick--exchange-code-for-token code (ticktick--authorization-header))))
+        (if tok
+            (progn
+              (setq ticktick-token tok)
+              (ticktick--save-token)
+              (insert "Authentication successful! You can close this window.")
+              (message "TickTick: authenticated successfully."))
+          (insert "Authentication failed while exchanging code.")
+          (message "TickTick: token exchange failed.")))))))
+
 ;;;###autoload
 (defun ticktick-authorize ()
   "Authorize tick.el with TickTick and obtain an access token."
