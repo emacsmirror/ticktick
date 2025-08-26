@@ -140,7 +140,7 @@
 
 
 (defcustom ticktick--autosync nil
-  "If non-nil, automatically sync TickTick when switching buffers or Emacs loses focus."
+  "If non-nil, automatically sync when switching buffers or losing focus."
   :type 'boolean
   :group 'ticktick)
 
@@ -248,7 +248,7 @@
     (httpd-start)))
 
 ;; The servlet name determines the path: /ticktick-callback
-(defservlet ticktick-callback text/plain (path query)
+(defservlet ticktick-callback text/plain (_path query)
   "Handle the TickTick OAuth redirect."
   (let ((code  (cadr (assoc "code" query)))
         (state (cadr (assoc "state" query))))
@@ -307,7 +307,7 @@ Starts local server, requests consent through browser, then captures redirect."
 (defun ticktick-authorize-manual (code)
   "Manually exchange CODE for an access token (fallback)."
   (interactive "sPaste ?code= value from redirect URL: ")
-  (let ((tok (ticktick--exchange-code-for-token code (ticktick--authorization-header))))
+  (let ((tok (ticktick--exchange-code-for-token code)))
     (if tok
         (progn
           (setq ticktick-token tok)
