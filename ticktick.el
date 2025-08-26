@@ -2,7 +2,7 @@
 
 ;; Author: Paul Huang
 ;; Version: 1.0.0
-;; Package-Requires: ((emacs "26.1") (request "0.3.0") (simple-httpd "1.5.0"))
+;; Package-Requires: ((emacs "27.1") (request "0.3.0") (simple-httpd "1.5.0"))
 ;; Keywords: tools, ticktick, org, tasks, todo
 ;; URL: https://github.com/polhuang/ticktick.el
 
@@ -163,8 +163,10 @@
 (defvar ticktick--sync-timer nil
   "Timer object for periodic syncing.")
 
-;; --- Token persistence helpers (optional but handy) --------------------------
+;; --- Token persistence helpers -----------------------------------------------
+
 (defun ticktick--ensure-dir ()
+  "Check if `ticktick-dir` exists, otherwise create."
   (unless (file-directory-p ticktick-dir)
     (make-directory ticktick-dir t)))
 
@@ -195,34 +197,41 @@
 
 (defun ticktick--make-token-request (form-params)
   "Make a token request with FORM-PARAMS and return the response data."
-  (let* ((form-data (mapconcat
-                     (lambda (kv)
-                       (concat (url-hexify-string (car kv)) "=" (url-hexify-string (cdr kv))))
-                     form-params
-                     "&"))
+  (let* ((form-data
+          (mapconcat
+           (lambda (kv)
+             (format "%s=%s"
+                     (url-hexify-string (car kv))
+                     (url-hexify-string (format "%s" (cdr kv)))))
+           form-params
+           "&"))
          (authorization (ticktick--authorization-header))
-         (response-data nil)
-         (request-obj (request "https://ticktick.com/oauth/token"
-                        :type "POST"
-                        :headers `(("Authorization" . ,authorization)
-                                   ("Content-Type" . "application/x-www-form-urlencoded"))
-                        :data form-data
-                        :parser (lambda ()
-                                  (let ((json-object-type 'plist))
-                                    (json-read)))
-                        :sync t
-                        :success (cl-function 
-                                  (lambda (&key data response &allow-other-keys)
-                                    (setq response-data data)))
-                        :error (cl-function 
-                                (lambda (&key response error-thrown &allow-other-keys)
-                                  (message "Token request failed: %s (HTTP %s)" 
-                                           (or error-thrown "unknown error")
-                                           (and response (request-response-status-code response)))
-                                  (setq response-data nil))))))
+         (response-data nil))
+    (request "https://ticktick.com/oauth/token"
+      :type "POST"
+      :headers `(("Authorization" . ,authorization)
+                 ("Content-Type" . "application/x-www-form-urlencoded"))
+      :data form-data
+      :parser (lambda ()
+                (let ((json-object-type 'plist)
+                      (json-array-type 'list))
+                  (json-read)))
+      :sync t
+      :success (cl-function
+                (lambda (&key data &allow-other-keys)
+                  (setq response-data data)))
+      :error (cl-function
+              (lambda (&key response error-thrown &allow-other-keys)
+                (message "Token request failed: %s (HTTP %s)"
+                         (or error-thrown "unknown error")
+                         (and response (request-response-status-code response)))
+                (setq response-data nil))))
     (when (and response-data (plist-get response-data :access_token))
-      (plist-put response-data :created_at (float-time))
-      response-data)))
+      ;; capture the updated plist
+      (setq response-data
+            (plist-put response-data :created_at (float-time))))
+    response-data))
+
 
 (defun ticktick--exchange-code-for-token (code)
   "Exchange the authorization CODE for an access token."
@@ -276,8 +285,8 @@
 
 ;;;###autoload
 (defun ticktick-authorize ()
-  "Authorize ticktick.el with TickTick and obtain an access token via local callback.
-Starts a local server, opens the browser for consent, then captures the redirect."
+  "Authorize with TickTick and obtain an access token via local callback.
+Starts local server, requests consent through browser, then captures redirect."
   (interactive)
   (unless (and (stringp ticktick-client-id) (not (string-empty-p ticktick-client-id))
                (stringp ticktick-client-secret) (not (string-empty-p ticktick-client-secret)))
@@ -356,48 +365,44 @@ Starts a local server, opens the browser for consent, then captures the redirect
         (json-error nil)))))
 
 (defun ticktick-request (method endpoint &optional data)
-  "Send a request to the TickTick API.
-METHOD is the HTTP method as a string.
-ENDPOINT is the API endpoint.
-DATA is an alist of data to send with the request."
+  "Send a request to the TickTick API."
   (ticktick-ensure-token)
   (let* ((url (concat "https://api.ticktick.com" endpoint))
          (access-token (plist-get ticktick-token :access_token))
          (headers `(("Authorization" . ,(concat "Bearer " access-token))
                     ("Content-Type" . "application/json")))
          (json-data (and data (json-encode data)))
-         (response-data nil)
-         (request-obj (request url
-                        :type method
-                        :headers headers
-                        :data json-data
-                        :parser #'ticktick--parse-json-maybe
-                        :sync t
-                        :success (cl-function
-                                  (lambda (&key data response &allow-other-keys)
-                                    (let ((status (request-response-status-code response)))
-                                      (cond
-                                       ((and (>= status 200) (< status 300))
-                                        ;; data may be nil on 204, and that's OK
-                                        (setq response-data data))
-                                       ((= status 401)
-                                        (ticktick-refresh-token)
-                                        (setq response-data (ticktick-request method endpoint data)))
-                                       (t
-                                        (error "HTTP Error %s" status))))))
-                        :error (cl-function 
-                                (lambda (&key response error-thrown &allow-other-keys)
-                                  (let ((status-code (and response (request-response-status-code response))))
-                                    (cond
-                                     ((and status-code (= status-code 401))
-                                      (ticktick-refresh-token)
-                                      (setq response-data (ticktick-request method endpoint data)))
-                                     (t
-                                      (message "Request failed: %s" 
-                                               (or (and response (request-response-data response))
-                                                   error-thrown))
-                                      (setq response-data nil)))))))))
+         (response-data nil))
+    (request url
+      :type method
+      :headers headers
+      :data json-data
+      :parser #'ticktick--parse-json-maybe
+      :sync t
+      :success (cl-function
+                (lambda (&key data response &allow-other-keys)
+                  (let ((status (request-response-status-code response)))
+                    (cond
+                     ((and (>= status 200) (< status 300))
+                      (setq response-data data))
+                     ((= status 401)
+                      (ticktick-refresh-token)
+                      (setq response-data (ticktick-request method endpoint data)))
+                     (t (error "HTTP Error %s" status))))))
+      :error (cl-function
+              (lambda (&key response error-thrown &allow-other-keys)
+                (let ((status (and response (request-response-status-code response))))
+                  (cond
+                   ((= status 401)
+                    (ticktick-refresh-token)
+                    (setq response-data (ticktick-request method endpoint data)))
+                   (t
+                    (message "Request failed: %s"
+                             (or (and response (request-response-data response))
+                                 error-thrown))
+                    (setq response-data nil)))))))
     response-data))
+
 
 
 ;;; Org conversion helpers -----------------------------------------------------
@@ -490,10 +495,15 @@ DATA is an alist of data to send with the request."
 ;;; Sync functions -------------------------------------------------------------
 
 (defun ticktick--create-project-heading (project-name project-id)
-  "Create a new project heading with PROJECT-NAME and PROJECT-ID."
+  "Insert a new Org heading for PROJECT-NAME with PROJECT-ID.
+Return the buffer position at the start of the heading."
   (goto-char (point-max))
-  (insert (format "* %s\n:PROPERTIES:\n:TICKTICK_PROJECT_ID: %s\n:END:\n" project-name project-id))
-  (point-at-bol))
+  (unless (bolp) (insert "\n"))            ; ensure we start on a fresh line
+  (let ((start (point)))                   ; this will be the heading's start
+    (insert (format "* %s\n:PROPERTIES:\n:TICKTICK_PROJECT_ID: %s\n:END:\n"
+                    project-name project-id))
+    start))
+
 
 (defun ticktick--sync-task (task project-pos)
   "Sync a single TASK under PROJECT-POS, updating or creating as needed."
@@ -651,7 +661,32 @@ When set to a positive number, TickTick will sync automatically every N minutes.
 ;; Initialize timer on load
 (ticktick--setup-sync-timer)
 
-(add-hook 'focus-out-hook #'ticktick--autosync)
+;; Run autosync when frame loses focus
+
+(defun ticktick--maybe-autosync-on-focus-change (&rest _)
+  "Trigger autosync when the selected frame loses focus."
+  (when (and (fboundp 'frame-focus-state)
+             (not (frame-focus-state (selected-frame))))
+    (run-with-idle-timer 0 nil #'ticktick--autosync)))
+
+;;;###autoload
+(defun ticktick-enable-autosync-on-blur ()
+  "Enable automatic synchronization when Emacs loses window focus."
+  (if (boundp 'after-focus-change-function)
+      (add-function :after after-focus-change-function
+                    #'ticktick--maybe-autosync-on-focus-change)
+    (with-suppressed-warnings ((obsolete focus-out-hook))
+      (add-hook 'focus-out-hook #'ticktick--autosync))))
+
+;;;###autoload
+(defun ticktick-disable-autosync-on-blur ()
+  "Disable automatic synchronization on window focus loss."
+  (if (boundp 'after-focus-change-function)
+      (remove-function after-focus-change-function
+                       #'ticktick--maybe-autosync-on-focus-change)
+    (with-suppressed-warnings ((obsolete focus-out-hook))
+      (remove-hook 'focus-out-hook #'ticktick--autosync))))
+
 (add-hook 'window-buffer-change-functions (lambda (&rest _) (ticktick--autosync)))
 
 (provide 'ticktick)
