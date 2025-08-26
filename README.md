@@ -2,6 +2,8 @@
 
 ticktick.el enables two-way synchronization between [TickTick](https://ticktick.com), a popular task management app, and Emacs Org Mode.
 
+![alt text](screenshot.png)
+
 ## Features
 
 - **Bidirectional sync**
