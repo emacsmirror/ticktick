@@ -52,6 +52,17 @@
   :type 'file
   :group 'ticktick)
 
+(defcustom ticktick-sync-file (expand-file-name "ticktick.org" ticktick-dir)
+  "Path to the org file where all TickTick tasks will be synchronized."
+  :type 'file
+  :group 'ticktick)
+
+
+(defcustom ticktick--autosync nil
+  "If non-nil, automatically sync TickTick when switching buffers or Emacs loses focus."
+  :type 'boolean
+  :group 'ticktick)
+
 (defcustom ticktick-httpd-port 8080
   "Local port for the OAuth callback server."
   :type 'integer
@@ -62,26 +73,11 @@
   :type 'string
   :group 'ticktick)
 
-(defcustom ticktick-snapshots-file
-  (expand-file-name ".ticktick-snapshots" ticktick-dir)
-  "File in which to store sync snapshots for incremental sync."
-  :type 'file
-  :group 'ticktick)
-
-(defcustom ticktick-org-file "ticktick.org"
-  "Org file to sync with TickTick. If nil, uses current buffer when syncing."
-  :type '(choice (const :tag "Current buffer" nil)
-                 (file :tag "Org file"))
-  :group 'ticktick)
-
 (defvar ticktick-token nil
   "Access token plist for accessing the TickTick API.")
 
 (defvar ticktick-oauth-state nil
   "CSRF-prevention state for the OAuth flow.")
-
-(defvar ticktick-snapshots nil
-  "Cached snapshots data for incremental sync.")
 
 ;; --- Token persistence helpers (optional but handy) --------------------------
 (defun ticktick--ensure-dir ()
@@ -105,131 +101,6 @@
 
 ;; Load any existing token at startup
 (ticktick--load-token)
-
-;;; Snapshot management --------------------------------------------------------
-
-(defun ticktick--save-snapshots ()
-  "Persist `ticktick-snapshots` to `ticktick-snapshots-file`."
-  (when ticktick-snapshots
-    (ticktick--ensure-dir)
-    (with-temp-file ticktick-snapshots-file
-      (insert (prin1-to-string ticktick-snapshots)))))
-
-(defun ticktick--load-snapshots ()
-  "Load snapshots from `ticktick-snapshots-file` into `ticktick-snapshots`."
-  (when (file-exists-p ticktick-snapshots-file)
-    (with-temp-buffer
-      (insert-file-contents ticktick-snapshots-file)
-      (goto-char (point-min))
-      (setq ticktick-snapshots (read (current-buffer))))))
-
-(defun ticktick--get-org-file-path ()
-  "Get the org file path to sync. Uses `ticktick-org-file` or current buffer."
-  (or ticktick-org-file
-      (and (derived-mode-p 'org-mode) (buffer-file-name))
-      (user-error "No org file specified and current buffer is not an org file")))
-
-(defun ticktick--create-org-snapshot (org-file-path)
-  "Create a snapshot of the org file at ORG-FILE-PATH."
-  (with-temp-buffer
-    (insert-file-contents org-file-path)
-    (let ((tasks (ticktick--parse-org-tasks)))
-      (list :file org-file-path
-            :timestamp (float-time)
-            :tasks tasks
-            :content-hash (secure-hash 'md5 (current-buffer))))))
-
-(defun ticktick--create-ticktick-snapshot (tasks)
-  "Create a snapshot of TickTick TASKS."
-  (list :timestamp (float-time)
-        :tasks tasks
-        :tasks-hash (secure-hash 'md5 (prin1-to-string tasks))))
-
-(defun ticktick--get-current-snapshots ()
-  "Get current snapshots, loading from file if not in memory."
-  (unless ticktick-snapshots
-    (ticktick--load-snapshots))
-  (or ticktick-snapshots
-      (list :org nil :ticktick nil :sync-timestamp nil)))
-
-(defun ticktick--update-snapshots (org-snapshot ticktick-snapshot)
-  "Update snapshots with new ORG-SNAPSHOT and TICKTICK-SNAPSHOT."
-  (setq ticktick-snapshots
-        (list :org org-snapshot
-              :ticktick ticktick-snapshot
-              :sync-timestamp (float-time)))
-  (ticktick--save-snapshots))
-
-;;; Org file parsing and diffing -----------------------------------------------
-
-(defun ticktick--parse-org-tasks ()
-  "Parse org tasks from current buffer and return a list of task plists."
-  (let ((tasks '()))
-    (org-map-entries
-     (lambda ()
-       (let* ((heading (org-get-heading t t t t))
-              (todo-state (org-get-todo-state))
-              (tags (org-get-tags))
-              (scheduled (org-get-scheduled-time (point)))
-              (deadline (org-get-deadline-time (point)))
-              (id (org-id-get-create))
-              (priority (org-get-priority))
-              (content (save-excursion
-                        (org-back-to-heading t)
-                        (let ((start (point)))
-                          (org-end-of-subtree)
-                          (buffer-substring-no-properties start (point))))))
-         (push (list :id id
-                     :heading heading
-                     :todo-state todo-state
-                     :tags tags
-                     :scheduled scheduled
-                     :deadline deadline
-                     :priority priority
-                     :content content
-                     :content-hash (secure-hash 'md5 content))
-               tasks)))
-     t 'file)
-    (nreverse tasks)))
-
-(defun ticktick--normalize-task (task)
-  "Normalize a TASK for comparison by removing position-dependent fields."
-  (let ((normalized (copy-sequence task)))
-    (plist-put normalized :content nil)
-    normalized))
-
-(defun ticktick--find-task-by-id (task-id tasks)
-  "Find a task with TASK-ID in TASKS list."
-  (cl-find-if (lambda (task) (string= (plist-get task :id) task-id)) tasks))
-
-(defun ticktick--task-changed-p (old-task new-task)
-  "Check if NEW-TASK has changed compared to OLD-TASK."
-  (not (equal (ticktick--normalize-task old-task)
-              (ticktick--normalize-task new-task))))
-
-(defun ticktick--diff-org-tasks (old-tasks new-tasks)
-  "Compare OLD-TASKS with NEW-TASKS and return changes.
-Returns a plist with :added, :modified, :deleted lists."
-  (let ((added '())
-        (modified '())
-        (deleted '()))
-    
-    (dolist (new-task new-tasks)
-      (let* ((task-id (plist-get new-task :id))
-             (old-task (ticktick--find-task-by-id task-id old-tasks)))
-        (if old-task
-            (when (ticktick--task-changed-p old-task new-task)
-              (push (list :old old-task :new new-task) modified))
-          (push new-task added))))
-    
-    (dolist (old-task old-tasks)
-      (let ((task-id (plist-get old-task :id)))
-        (unless (ticktick--find-task-by-id task-id new-tasks)
-          (push old-task deleted))))
-    
-    (list :added (nreverse added)
-          :modified (nreverse modified)
-          :deleted (nreverse deleted))))
 
 ;;; Authorization functions ----------------------------------------------------
 
@@ -405,131 +276,6 @@ Starts a local server, opens the browser for consent, then captures the redirect
                (not (ticktick-token-expired-p ticktick-token)))
     (ticktick-refresh-token)))
 
-;;; TickTick task operations ---------------------------------------------------
-
-(defun ticktick--get-all-tasks ()
-  "Get all tasks from TickTick."
-  (let ((tasks '())
-        (projects (ticktick-request "GET" "/open/v1/project")))
-    (dolist (project projects)
-      (let* ((project-id (plist-get project :id))
-             (project-tasks (ticktick-request "GET" (format "/open/v1/project/%s/task" project-id))))
-        (dolist (task project-tasks)
-          (plist-put task :project-id project-id)
-          (push task tasks))))
-    (nreverse tasks)))
-
-(defun ticktick--create-task (task)
-  "Create a new task in TickTick from org TASK."
-  (let* ((project-id (or (plist-get task :project-id) "inbox"))
-         (task-data (ticktick--org-task-to-ticktick task)))
-    (ticktick-request "POST" (format "/open/v1/project/%s/task" project-id) task-data)))
-
-(defun ticktick--update-task (task)
-  "Update an existing task in TickTick from org TASK."
-  (let* ((project-id (plist-get task :project-id))
-         (task-id (plist-get task :ticktick-id))
-         (task-data (ticktick--org-task-to-ticktick task)))
-    (when (and project-id task-id)
-      (ticktick-request "POST" (format "/open/v1/project/%s/task/%s" project-id task-id) task-data))))
-
-(defun ticktick--delete-task (task)
-  "Delete a task in TickTick."
-  (let* ((project-id (plist-get task :project-id))
-         (task-id (plist-get task :ticktick-id)))
-    (when (and project-id task-id)
-      (ticktick-request "DELETE" (format "/open/v1/project/%s/task/%s" project-id task-id)))))
-
-(defun ticktick--org-task-to-ticktick (org-task)
-  "Convert an org TASK to TickTick task format."
-  (let ((due-date nil)
-        (start-date nil))
-    
-    (when-let ((deadline (plist-get org-task :deadline)))
-      (setq due-date (format-time-string "%Y-%m-%dT%H:%M:%S.000+0000" deadline t)))
-    
-    (when-let ((scheduled (plist-get org-task :scheduled)))
-      (setq start-date (format-time-string "%Y-%m-%dT%H:%M:%S.000+0000" scheduled t)))
-    
-    (let ((task-data (list :title (plist-get org-task :heading)
-                          :content (or (plist-get org-task :content) "")
-                          :status (if (string= (plist-get org-task :todo-state) "DONE") 2 0))))
-      
-      (when due-date
-        (plist-put task-data :dueDate due-date))
-      
-      (when start-date
-        (plist-put task-data :startDate start-date))
-      
-      (when-let ((tags (plist-get org-task :tags)))
-        (plist-put task-data :tags tags))
-      
-      (let ((priority (plist-get org-task :priority)))
-        (when priority
-          (plist-put task-data :priority (cond
-                                         ((>= priority org-priority-highest) 3)
-                                         ((>= priority org-priority-default) 1)
-                                         (t 0)))))
-      
-      task-data)))
-
-(defun ticktick--ticktick-task-to-org (ticktick-task)
-  "Convert a TickTick TASK to org task format."
-  (let* ((title (plist-get ticktick-task :title))
-         (content (plist-get ticktick-task :content))
-         (status (plist-get ticktick-task :status))
-         (due-date (plist-get ticktick-task :dueDate))
-         (start-date (plist-get ticktick-task :startDate))
-         (tags (plist-get ticktick-task :tags))
-         (priority (plist-get ticktick-task :priority))
-         (todo-state (if (= status 2) "DONE" "TODO")))
-    
-    (list :ticktick-id (plist-get ticktick-task :id)
-          :project-id (plist-get ticktick-task :projectId)
-          :heading title
-          :content content
-          :todo-state todo-state
-          :deadline (when due-date (date-to-time due-date))
-          :scheduled (when start-date (date-to-time start-date))
-          :tags tags
-          :priority (cond
-                    ((= priority 3) org-priority-highest)
-                    ((= priority 1) org-priority-default)
-                    (t org-priority-lowest)))))
-
-(defun ticktick--find-ticktick-task-by-org-id (org-id ticktick-tasks)
-  "Find TickTick task that corresponds to org task with ORG-ID."
-  (cl-find-if (lambda (task)
-                (string= (plist-get task :content) org-id))
-              ticktick-tasks))
-
-(defun ticktick--diff-ticktick-tasks (old-tasks new-tasks)
-  "Compare old TickTick tasks with new tasks and return changes."
-  (let ((added '())
-        (modified '())
-        (deleted '()))
-    
-    (dolist (new-task new-tasks)
-      (let* ((task-id (plist-get new-task :id))
-             (old-task (cl-find-if (lambda (task) 
-                                   (string= (plist-get task :id) task-id)) 
-                                 old-tasks)))
-        (if old-task
-            (unless (equal old-task new-task)
-              (push (list :old old-task :new new-task) modified))
-          (push new-task added))))
-    
-    (dolist (old-task old-tasks)
-      (let ((task-id (plist-get old-task :id)))
-        (unless (cl-find-if (lambda (task) 
-                            (string= (plist-get task :id) task-id)) 
-                          new-tasks)
-          (push old-task deleted))))
-    
-    (list :added (nreverse added)
-          :modified (nreverse modified)
-          :deleted (nreverse deleted))))
-
 ;;; Core request ---------------------------------------------------------------
 
 (defun ticktick-request (method endpoint &optional data)
@@ -579,248 +325,178 @@ DATA is an alist of data to send with the request."
     response-data))
 
 
-;;; Bidirectional sync with conflict resolution ----------------------------------
+;;; Org conversion helpers -----------------------------------------------------
 
-(defun ticktick--apply-org-changes-to-file (org-file-path changes)
-  "Apply ORG CHANGES to the org file at ORG-FILE-PATH."
-  (with-current-buffer (find-file-noselect org-file-path)
-    (dolist (added-task (plist-get changes :added))
-      (ticktick--insert-org-task added-task))
-    
-    (dolist (modification (plist-get changes :modified))
-      (let ((new-task (plist-get modification :new)))
-        (ticktick--update-org-task new-task)))
-    
-    (dolist (deleted-task (plist-get changes :deleted))
-      (ticktick--delete-org-task deleted-task))
-    
-    (save-buffer)))
+(defun ticktick--task-to-heading (task)
+  "Convert TASK plist to an org heading string."
+  (let ((id (plist-get task :id))
+        (title (plist-get task :title))
+        (status (plist-get task :status))
+        (priority (plist-get task :priority))
+        (due (plist-get task :dueDate))
+        (etag (plist-get task :etag))
+        (content (plist-get task :content)))
+    (string-join
+     (delq nil
+           (list
+            (format "** %s%s %s"
+                    (if (= status 2) "DONE" "TODO")
+                    (pcase priority (5 " [#A]") (3 " [#B]") (1 " [#C]") (_ ""))
+                    title)
+            (when due
+              (format "DEADLINE: <%s>" (format-time-string "%Y-%m-%d %a" (date-to-time due))))
+            ":PROPERTIES:"
+            (format ":TICKTICK_ID: %s" id)
+            (format ":TICKTICK_ETAG: %s" (or etag ""))
+            ":END:"
+            (when content (string-trim content))))
+     "\n")))
 
-(defun ticktick--insert-org-task (task)
-  "Insert a new org TASK into the current buffer."
-  (goto-char (point-max))
-  (insert "\n* " (plist-get task :todo-state) " " (plist-get task :heading))
-  (when-let ((tags (plist-get task :tags)))
-    (insert " :" (mapconcat 'identity tags ":") ":"))
-  (insert "\n")
-  
-  (when-let ((scheduled (plist-get task :scheduled)))
-    (insert "SCHEDULED: ")
-    (insert (format-time-string "<%Y-%m-%d %a>" scheduled))
-    (insert "\n"))
-  
-  (when-let ((deadline (plist-get task :deadline)))
-    (insert "DEADLINE: ")
-    (insert (format-time-string "<%Y-%m-%d %a>" deadline))
-    (insert "\n"))
-  
-  (when-let ((content (plist-get task :content)))
-    (unless (string-blank-p content)
-      (insert content "\n")))
-  
-  (let ((id (plist-get task :id)))
-    (unless id
-      (setq id (org-id-new))
-      (plist-put task :id id))
-    (insert ":PROPERTIES:\n:ID: " id "\n:END:\n")))
+(defun ticktick--heading-to-task ()
+  "Convert org heading at point to a TickTick task plist."
+  (let* ((el (org-element-at-point))
+         (title (org-element-property :title el))
+         (todo (org-element-property :todo-type el))
+         (priority (org-element-property :priority el))
+         (deadline (org-element-property :deadline el))
+         (id (org-entry-get nil "TICKTICK_ID"))
+         (content
+          (save-excursion
+            (save-restriction
+              (org-narrow-to-subtree)
+              (goto-char (point-min))
+              (forward-line)
+              (while (looking-at org-planning-line-re)
+                (forward-line))
+              (when (looking-at ":PROPERTIES:")
+                (re-search-forward "^:END:" nil t)
+                (forward-line))
+              (string-trim (buffer-substring-no-properties (point) (point-max)))))))
+    `(("id" . ,id)
+      ("title" . ,title)
+      ("status" . ,(if (eq todo 'done) 2 0))
+      ("priority" . ,(pcase priority (?A 5) (?B 3) (?C 1) (_ 0)))
+      ("dueDate" . ,(when deadline
+                      (format-time-string "%Y-%m-%dT%H:%M:%S+0000"
+                                          (org-timestamp-to-time deadline))))
+      ("content" . ,content))))
 
-(defun ticktick--update-org-task (task)
-  "Update an existing org TASK in the current buffer."
-  (let ((id (plist-get task :id)))
-    (when id
-      (org-id-goto id)
-      (org-back-to-heading t)
-      (let ((start (point)))
-        (org-end-of-subtree)
-        (delete-region start (point))
-        (goto-char start)
-        (ticktick--insert-org-task task)))))
+(defun ticktick--should-sync-p ()
+  "Return non-nil if the current subtree changed since last sync."
+  (let* ((etag (org-entry-get nil "TICKTICK_ETAG"))
+         (cached (org-entry-get nil "SYNC_CACHE"))
+         (body (buffer-substring-no-properties
+                (org-entry-beginning-position)
+                (org-entry-end-position)))
+         (changed (not (string= cached (secure-hash 'sha1 body)))))
+    (or (not etag) changed)))
 
-(defun ticktick--delete-org-task (task)
-  "Delete an org TASK from the current buffer."
-  (let ((id (plist-get task :id)))
-    (when id
-      (org-id-goto id)
-      (org-back-to-heading t)
-      (let ((start (point)))
-        (org-end-of-subtree)
-        (delete-region start (point))))))
+(defun ticktick--update-sync-meta ()
+  "Set sync hash and time on current subtree."
+  (let ((body (buffer-substring-no-properties (org-entry-beginning-position)
+                                              (org-entry-end-position))))
+    (org-set-property "LAST_SYNCED" (format-time-string "%Y-%m-%dT%H:%M:%S%z"))
+    (org-set-property "SYNC_CACHE" (secure-hash 'sha1 body))))
 
-(defun ticktick--sync-org-changes-to-ticktick (org-changes)
-  "Sync ORG CHANGES to TickTick."
-  (dolist (added-task (plist-get org-changes :added))
-    (let ((created-task (ticktick--create-task added-task)))
-      (when created-task
-        (plist-put added-task :ticktick-id (plist-get created-task :id)))))
-  
-  (dolist (modification (plist-get org-changes :modified))
-    (let ((new-task (plist-get modification :new)))
-      (ticktick--update-task new-task)))
-  
-  (dolist (deleted-task (plist-get org-changes :deleted))
-    (ticktick--delete-task deleted-task)))
+;;; Sync functions -------------------------------------------------------------
 
-(defun ticktick--sync-ticktick-changes-to-org (org-file-path ticktick-changes)
-  "Sync TickTick CHANGES to org file."
-  (let ((org-changes (list :added '() :modified '() :deleted '())))
-    
-    (dolist (added-task (plist-get ticktick-changes :added))
-      (let ((org-task (ticktick--ticktick-task-to-org added-task)))
-        (push org-task (plist-get org-changes :added))))
-    
-    (dolist (modification (plist-get ticktick-changes :modified))
-      (let* ((new-ticktick-task (plist-get modification :new))
-             (org-task (ticktick--ticktick-task-to-org new-ticktick-task)))
-        (push (list :old nil :new org-task) (plist-get org-changes :modified))))
-    
-    (dolist (deleted-task (plist-get ticktick-changes :deleted))
-      (let ((org-task (ticktick--ticktick-task-to-org deleted-task)))
-        (push org-task (plist-get org-changes :deleted))))
-    
-    (ticktick--apply-org-changes-to-file org-file-path org-changes)))
+(defun ticktick--find-task-under-project (project-heading id)
+  "Return position of task heading with ID under PROJECT-HEADING."
+  (save-excursion
+    (goto-char project-heading)
+    (catch 'found
+      (org-map-entries
+       (lambda ()
+         (when (string= (org-entry-get nil "TICKTICK_ID") id)
+           (throw 'found (point))))
+       nil 'tree)
+      nil)))
 
-(defun ticktick--resolve-conflicts (org-changes ticktick-changes)
-  "Resolve conflicts between org and TickTick changes.
-Returns a plist with :org-wins and :ticktick-wins changes."
-  (let ((org-wins (copy-sequence org-changes))
-        (ticktick-wins (copy-sequence ticktick-changes))
-        (conflicts '()))
-    
-    (dolist (org-mod (plist-get org-changes :modified))
-      (let* ((org-task-id (plist-get (plist-get org-mod :new) :id))
-             (conflicting-ticktick-mod 
-              (cl-find-if (lambda (tt-mod)
-                           (let ((tt-task (plist-get tt-mod :new)))
-                             (string= (plist-get tt-task :content) org-task-id)))
-                         (plist-get ticktick-changes :modified))))
-        (when conflicting-ticktick-mod
-          (push (list :org org-mod :ticktick conflicting-ticktick-mod) conflicts)
-          (setf (plist-get org-wins :modified)
-                (cl-remove org-mod (plist-get org-wins :modified)))
-          (setf (plist-get ticktick-wins :modified)
-                (cl-remove conflicting-ticktick-mod (plist-get ticktick-wins :modified))))))
-    
-    (when conflicts
-      (message "Conflict resolution: defaulting to org changes for %d conflicts" (length conflicts))
-      (dolist (conflict conflicts)
-        (push (plist-get conflict :org) (plist-get org-wins :modified))))
-    
-    (list :org-wins org-wins :ticktick-wins ticktick-wins :conflicts conflicts)))
-
-;;;###autoload
-(defun ticktick-sync ()
-  "Perform bidirectional incremental sync between org and TickTick."
+(defun ticktick-fetch-to-org ()
+  "Fetch all tasks from TickTick and update org file without duplicating."
   (interactive)
-  (let* ((org-file-path (ticktick--get-org-file-path))
-         (snapshots (ticktick--get-current-snapshots))
-         (old-org-snapshot (plist-get snapshots :org))
-         (old-ticktick-snapshot (plist-get snapshots :ticktick)))
-    
-    (message "TickTick: Starting bidirectional sync...")
-    
-    (let* ((current-org-snapshot (ticktick--create-org-snapshot org-file-path))
-           (current-org-tasks (plist-get current-org-snapshot :tasks))
-           (current-ticktick-tasks (ticktick--get-all-tasks))
-           (current-ticktick-snapshot (ticktick--create-ticktick-snapshot current-ticktick-tasks)))
-      
-      (let* ((org-changes (if old-org-snapshot
-                             (ticktick--diff-org-tasks 
-                              (plist-get old-org-snapshot :tasks)
-                              current-org-tasks)
-                           (list :added current-org-tasks :modified '() :deleted '())))
-             (ticktick-changes (if old-ticktick-snapshot
-                                  (ticktick--diff-ticktick-tasks
-                                   (plist-get old-ticktick-snapshot :tasks)
-                                   current-ticktick-tasks)
-                                (list :added current-ticktick-tasks :modified '() :deleted '()))))
-        
-        (if (and (not (plist-get org-changes :added))
-                 (not (plist-get org-changes :modified)) 
-                 (not (plist-get org-changes :deleted))
-                 (not (plist-get ticktick-changes :added))
-                 (not (plist-get ticktick-changes :modified))
-                 (not (plist-get ticktick-changes :deleted)))
-            (message "TickTick: No changes detected")
-          
-          (let ((resolution (ticktick--resolve-conflicts org-changes ticktick-changes)))
-            (let ((org-wins (plist-get resolution :org-wins))
-                  (ticktick-wins (plist-get resolution :ticktick-wins)))
-              
-              (when (or (plist-get org-wins :added)
-                       (plist-get org-wins :modified)
-                       (plist-get org-wins :deleted))
-                (message "TickTick: Syncing org changes to TickTick...")
-                (ticktick--sync-org-changes-to-ticktick org-wins))
-              
-              (when (or (plist-get ticktick-wins :added)
-                       (plist-get ticktick-wins :modified)
-                       (plist-get ticktick-wins :deleted))
-                (message "TickTick: Syncing TickTick changes to org...")
-                (ticktick--sync-ticktick-changes-to-org org-file-path ticktick-wins))
-              
-              (let ((final-org-snapshot (ticktick--create-org-snapshot org-file-path))
-                    (final-ticktick-tasks (ticktick--get-all-tasks)))
-                (ticktick--update-snapshots 
-                 final-org-snapshot
-                 (ticktick--create-ticktick-snapshot final-ticktick-tasks)))
-              
-              (message "TickTick: Sync completed successfully"))))))))
+  (let ((projects (ticktick-request "GET" "/open/v1/project")))
+    (with-current-buffer (find-file-noselect ticktick-sync-file)
+      (org-with-wide-buffer
+       (dolist (project projects)
+         (let* ((project-id (plist-get project :id))
+                (project-name (plist-get project :name))
+                (project-heading-re (format "^\\* %s$" (regexp-quote project-name)))
+                (project-pos (save-excursion
+                               (goto-char (point-min))
+                               (when (re-search-forward project-heading-re nil t)
+                                 (match-beginning 0)))))
+           (unless project-pos
+             (goto-char (point-max))
+             (insert (format "* %s\n:PROPERTIES:\n:TICKTICK_PROJECT_ID: %s\n:END:\n" project-name project-id))
+             (setq project-pos (point-at-bol)))
+           (goto-char project-pos)
+           (outline-show-subtree)
+           (let* ((project-data (ticktick-request "GET" (format "/open/v1/project/%s/data" project-id)))
+                  (tasks (plist-get project-data :tasks)))
+             (dolist (task tasks)
+               (let* ((id (plist-get task :id))
+                      (etag (plist-get task :etag))
+                      (existing-pos (ticktick--find-task-under-project project-pos id)))
+                 (if existing-pos
+                     (save-excursion
+                       (goto-char existing-pos)
+                       (let ((existing-etag (org-entry-get nil "TICKTICK_ETAG")))
+                         (unless (string= existing-etag etag)
+                           (delete-region (org-entry-beginning-position)
+                                          (org-entry-end-position))
+                           (insert (ticktick--task-to-heading task))
+                           (ticktick--update-sync-meta))))
+                   (save-excursion
+                     (goto-char project-pos)
+                     (outline-next-heading)
+                     (insert (ticktick--task-to-heading task) "\n")
+                     (ticktick--update-sync-meta))))))))
+       (save-buffer)))))
 
-;;; Additional utilities -------------------------------------------------------
-
-;;;###autoload
-(defun ticktick-clear-snapshots ()
-  "Clear all stored snapshots and force a full sync on next run."
+(defun ticktick-push-from-org ()
+  "Push all updated org tasks back to TickTick."
   (interactive)
-  (setq ticktick-snapshots nil)
-  (when (file-exists-p ticktick-snapshots-file)
-    (delete-file ticktick-snapshots-file))
-  (message "TickTick: Snapshots cleared. Next sync will be a full sync."))
+  (with-current-buffer (find-file-noselect ticktick-sync-file)
+    (org-with-wide-buffer
+     (goto-char (point-min))
+     (while (outline-next-heading)
+       (when (and (= (org-current-level) 2)
+                  (not (org-entry-get nil "TICKTICK_PROJECT_ID")))
+         (when (ticktick--should-sync-p)
+           (let* ((task (ticktick--heading-to-task))
+                  (project-id (org-entry-get nil "TICKTICK_PROJECT_ID" t))
+                  (id (org-entry-get nil "TICKTICK_ID")))
+             (if (and id (not (string-empty-p id)))
+                 (progn
+                   (ticktick-request "POST" (format "/open/v1/task/%s" id)
+                                     (append task `(("projectId" . ,project-id))))
+                   (ticktick--update-sync-meta)
+                   (message "Updated: %s" (alist-get "title" task)))
+               (let ((resp (ticktick-request "POST" "/open/v1/task"
+                                             (append task `(("projectId" . ,project-id))))))
+                 (when resp
+                   (org-set-property "TICKTICK_ID" (plist-get resp :id))
+                   (org-set-property "TICKTICK_ETAG" (plist-get resp :etag))
+                   (ticktick--update-sync-meta)
+                   (message "Created: %s" (plist-get resp :title)))))))))))
+     (save-buffer))
 
-;;;###autoload
-(defun ticktick-show-sync-status ()
-  "Show current sync status and snapshot information."
-  (interactive)
-  (let ((snapshots (ticktick--get-current-snapshots)))
-    (with-output-to-temp-buffer "*TickTick Sync Status*"
-      (princ "=== TickTick Sync Status ===\n\n")
-      
-      (let ((org-snapshot (plist-get snapshots :org))
-            (ticktick-snapshot (plist-get snapshots :ticktick))
-            (sync-timestamp (plist-get snapshots :sync-timestamp)))
-        
-        (if sync-timestamp
-            (princ (format "Last sync: %s\n\n" 
-                          (format-time-string "%Y-%m-%d %H:%M:%S" 
-                                            (seconds-to-time sync-timestamp))))
-          (princ "No previous sync found\n\n"))
-        
-        (if org-snapshot
-            (let ((org-tasks (plist-get org-snapshot :tasks)))
-              (princ (format "Org snapshot: %d tasks\n" (length org-tasks)))
-              (princ (format "Org file: %s\n" (plist-get org-snapshot :file)))
-              (princ (format "Org timestamp: %s\n" 
-                            (format-time-string "%Y-%m-%d %H:%M:%S" 
-                                              (seconds-to-time (plist-get org-snapshot :timestamp))))))
-          (princ "No org snapshot found\n"))
-        
-        (princ "\n")
-        
-        (if ticktick-snapshot
-            (let ((tt-tasks (plist-get ticktick-snapshot :tasks)))
-              (princ (format "TickTick snapshot: %d tasks\n" (length tt-tasks)))
-              (princ (format "TickTick timestamp: %s\n" 
-                            (format-time-string "%Y-%m-%d %H:%M:%S" 
-                                              (seconds-to-time (plist-get ticktick-snapshot :timestamp))))))
-          (princ "No TickTick snapshot found\n"))))))
 
-;;;###autoload
-(defun ticktick-force-full-sync ()
-  "Force a full bidirectional sync, ignoring snapshots."
+(defun ticktick-sync-two-way ()
+  "Two-way sync: push local changes first, then fetch remote updates."
   (interactive)
-  (ticktick-clear-snapshots)
-  (ticktick-sync))
+  (ticktick-push-from-org)
+  (ticktick-fetch-to-org))
+
+(defun ticktick--autosync ()
+  "Autosync if enabled."
+  (when ticktick--autosync
+    (when (file-exists-p ticktick-sync-file)
+      (ignore-errors (ticktick-sync-two-way)))))
+
+(add-hook 'focus-out-hook #'ticktick--autosync)
+(add-hook 'window-buffer-change-functions (lambda (&rest _) (ticktick--autosync)))
 
 (provide 'ticktick)
 ;;; ticktick.el ends here
-
