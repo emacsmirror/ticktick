@@ -6,7 +6,72 @@
 ;; URL: https://github.com/polhuang/ticktick.el
 
 ;;; Commentary:
-;; ticktick.el provides two-way sync between TickTick and Emacs / Org-mode.
+;; 
+;; ticktick.el provides seamless two-way synchronization between TickTick
+;; (a popular task management service) and Emacs Org Mode.
+;;
+;; FEATURES:
+;; 
+;; - Bidirectional sync: changes in either TickTick or Org Mode are reflected
+;;   in both systems
+;; - OAuth2 authentication with automatic token refresh
+;; - Preserves task metadata: priorities, due dates, completion status
+;; - Project-based organization matching TickTick's structure
+;; - Optional automatic syncing on focus changes
+;;
+;; SETUP:
+;;
+;; 1. Register a TickTick OAuth application at:
+;;    https://developer.ticktick.com/
+;;
+;; 2. Configure your credentials:
+;;    (setq ticktick-client-id "your-client-id")
+;;    (setq ticktick-client-secret "your-client-secret")
+;;
+;; 3. Authorize the application:
+;;    M-x ticktick-authorize
+;;
+;; 4. Perform initial sync:
+;;    M-x ticktick-sync-two-way
+;;
+;; USAGE:
+;;
+;; Main commands:
+;; - `ticktick-sync-two-way': Full bidirectional sync
+;; - `ticktick-fetch-to-org': Pull tasks from TickTick to Org
+;; - `ticktick-push-from-org': Push Org tasks to TickTick
+;; - `ticktick-authorize': Set up OAuth authentication
+;; - `ticktick-refresh-token': Manually refresh auth token
+;; - `ticktick-toggle-sync-timer': Toggle automatic timer-based syncing
+;;
+;; Tasks are stored in the file specified by `ticktick-sync-file' 
+;; (defaults to ~/.emacs.d/ticktick/ticktick.org) with this structure:
+;;
+;; * Project Name
+;; :PROPERTIES:
+;; :TICKTICK_PROJECT_ID: abc123
+;; :END:
+;; ** TODO Task Title [#A]
+;; DEADLINE: <2024-01-15 Mon>
+;; :PROPERTIES:
+;; :TICKTICK_ID: def456
+;; :TICKTICK_ETAG: xyz789
+;; :SYNC_CACHE: hash
+;; :LAST_SYNCED: 2025-01-15T10:30:00+0000
+;; :END:
+;; Task description content here.
+;;
+;; CUSTOMIZATION:
+;;
+;; Key variables you can customize:
+;; - `ticktick-sync-file': Path to the org file for tasks
+;; - `ticktick-dir': Directory for storing tokens and data
+;; - `ticktick--autosync': Enable automatic syncing on focus changes
+;; - `ticktick-sync-interval': Enable automatic syncing every N minutes
+;; - `ticktick-httpd-port': Port for OAuth callback server
+;;
+;; For debugging OAuth issues:
+;; M-x ticktick-debug-oauth
 
 ;;; Code:
 
@@ -79,6 +144,9 @@
 (defvar ticktick-oauth-state nil
   "CSRF-prevention state for the OAuth flow.")
 
+(defvar ticktick--sync-timer nil
+  "Timer object for periodic syncing.")
+
 ;; --- Token persistence helpers (optional but handy) --------------------------
 (defun ticktick--ensure-dir ()
   (unless (file-directory-p ticktick-dir)
@@ -109,16 +177,14 @@
           (base64-encode-string
            (concat ticktick-client-id ":" ticktick-client-secret) t)))
 
-(defun ticktick--exchange-code-for-token (code authorization)
-  "Exchange the authorization CODE for an access token using AUTHORIZATION header."
+(defun ticktick--make-token-request (form-params)
+  "Make a token request with FORM-PARAMS and return the response data."
   (let* ((form-data (mapconcat
                      (lambda (kv)
                        (concat (url-hexify-string (car kv)) "=" (url-hexify-string (cdr kv))))
-                     `(("grant_type" . "authorization_code")
-                       ("code" . ,code)
-                       ("redirect_uri" . ,ticktick-redirect-uri)
-                       ("scope" . ,ticktick-auth-scopes))
+                     form-params
                      "&"))
+         (authorization (ticktick--authorization-header))
          (response-data nil)
          (request-obj (request "https://ticktick.com/oauth/token"
                         :type "POST"
@@ -134,13 +200,21 @@
                                     (setq response-data data)))
                         :error (cl-function 
                                 (lambda (&key response error-thrown &allow-other-keys)
-                                  (message "Token exchange failed: %s (HTTP %s)" 
+                                  (message "Token request failed: %s (HTTP %s)" 
                                            (or error-thrown "unknown error")
                                            (and response (request-response-status-code response)))
                                   (setq response-data nil))))))
     (when (and response-data (plist-get response-data :access_token))
       (plist-put response-data :created_at (float-time))
       response-data)))
+
+(defun ticktick--exchange-code-for-token (code)
+  "Exchange the authorization CODE for an access token."
+  (ticktick--make-token-request
+   `(("grant_type" . "authorization_code")
+     ("code" . ,code)
+     ("redirect_uri" . ,ticktick-redirect-uri)
+     ("scope" . ,ticktick-auth-scopes))))
 
 (defun ticktick--start-callback-server ()
   "Start the local OAuth callback server if not already running."
@@ -159,7 +233,7 @@
      ((and ticktick-oauth-state (not (string= state ticktick-oauth-state)))
       (insert "Authentication failed: invalid state."))
      (t
-      (let ((tok (ticktick--exchange-code-for-token code (ticktick--authorization-header))))
+      (let ((tok (ticktick--exchange-code-for-token code)))
         (if tok
             (progn
               (setq ticktick-token tok)
@@ -223,38 +297,14 @@ Starts a local server, opens the browser for consent, then captures the redirect
   "Refresh the OAuth2 token."
   (interactive)
   (when ticktick-token
-    (let* ((authorization (ticktick--authorization-header))
-           (refresh-token (plist-get ticktick-token :refresh_token))
-           (form-data (mapconcat
-                       (lambda (kv)
-                         (concat (url-hexify-string (car kv)) "=" (url-hexify-string (cdr kv))))
-                       `(("grant_type" . "refresh_token")
-                         ("refresh_token" . ,refresh-token)
-                         ("redirect_uri" . ,ticktick-redirect-uri)
-                         ("scope" . ,ticktick-auth-scopes))
-                       "&"))
-           (response-data nil)
-           (request-obj (request "https://ticktick.com/oauth/token"
-                          :type "POST"
-                          :headers `(("Authorization" . ,authorization)
-                                     ("Content-Type" . "application/x-www-form-urlencoded"))
-                          :data form-data
-                          :parser (lambda ()
-                                    (let ((json-object-type 'plist))
-                                      (json-read)))
-                          :sync t
-                          :success (cl-function 
-                                    (lambda (&key data response &allow-other-keys)
-                                      (setq response-data data)))
-                          :error (cl-function 
-                                  (lambda (&key response error-thrown &allow-other-keys)
-                                    (message "Token refresh failed: %s (HTTP %s)" 
-                                             (or error-thrown "unknown error")
-                                             (and response (request-response-status-code response)))
-                                    (setq response-data nil))))))
-      (if (and response-data (plist-get response-data :access_token))
+    (let* ((refresh-token (plist-get ticktick-token :refresh_token))
+           (response-data (ticktick--make-token-request
+                          `(("grant_type" . "refresh_token")
+                            ("refresh_token" . ,refresh-token)
+                            ("redirect_uri" . ,ticktick-redirect-uri)
+                            ("scope" . ,ticktick-auth-scopes)))))
+      (if response-data
           (progn
-            (plist-put response-data :created_at (float-time))
             (setq ticktick-token response-data)
             (ticktick--save-token)
             (message "Token refreshed!"))
@@ -481,7 +531,7 @@ DATA is an alist of data to send with the request."
       (org-with-wide-buffer
        (dolist (project projects)
          (ticktick--sync-project project))
-       (save-buffer))))
+       (save-buffer)))))
 
 (defun ticktick-push-from-org ()
   "Push all updated org tasks back to TickTick."
@@ -499,7 +549,7 @@ DATA is an alist of data to send with the request."
              (if (and id (not (string-empty-p id)))
                  (ticktick--update-task task project-id id)
                (ticktick--create-task task project-id))))))
-     (save-buffer))
+     (save-buffer))))
 
 
 (defun ticktick-sync-two-way ()
@@ -513,6 +563,54 @@ DATA is an alist of data to send with the request."
   (when ticktick--autosync
     (when (file-exists-p ticktick-sync-file)
       (ignore-errors (ticktick-sync-two-way)))))
+
+(defun ticktick--setup-sync-timer ()
+  "Set up or tear down the sync timer based on `ticktick-sync-interval'."
+  (when ticktick--sync-timer
+    (cancel-timer ticktick--sync-timer)
+    (setq ticktick--sync-timer nil))
+  (when (and ticktick-sync-interval
+             (numberp ticktick-sync-interval)
+             (> ticktick-sync-interval 0))
+    (setq ticktick--sync-timer
+          (run-at-time ticktick-sync-interval
+                       (* ticktick-sync-interval 60)
+                       #'ticktick--timer-sync))))
+
+(defcustom ticktick-sync-interval nil
+  "Interval in minutes for automatic syncing. If nil, timer-based sync is disabled.
+When set to a positive number, TickTick will sync automatically every N minutes."
+  :type '(choice (const :tag "Disabled" nil)
+                 (integer :tag "Minutes"))
+  :group 'ticktick
+  :set (lambda (symbol value)
+         (set-default symbol value)
+         (ticktick--setup-sync-timer)))
+
+(defun ticktick--timer-sync ()
+  "Sync function called by timer."
+  (when (file-exists-p ticktick-sync-file)
+    (ignore-errors (ticktick-sync-two-way))))
+
+;;;###autoload
+(defun ticktick-toggle-sync-timer ()
+  "Toggle automatic timer-based syncing on/off."
+  (interactive)
+  (if ticktick--sync-timer
+      (progn
+        (cancel-timer ticktick--sync-timer)
+        (setq ticktick--sync-timer nil)
+        (message "TickTick timer sync disabled"))
+    (if (and ticktick-sync-interval
+             (numberp ticktick-sync-interval)
+             (> ticktick-sync-interval 0))
+        (progn
+          (ticktick--setup-sync-timer)
+          (message "TickTick timer sync enabled (every %d minutes)" ticktick-sync-interval))
+      (message "Set ticktick-sync-interval to enable timer sync"))))
+
+;; Initialize timer on load
+(ticktick--setup-sync-timer)
 
 (add-hook 'focus-out-hook #'ticktick--autosync)
 (add-hook 'window-buffer-change-functions (lambda (&rest _) (ticktick--autosync)))
