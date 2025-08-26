@@ -400,6 +400,67 @@ DATA is an alist of data to send with the request."
 
 ;;; Sync functions -------------------------------------------------------------
 
+(defun ticktick--create-project-heading (project-name project-id)
+  "Create a new project heading with PROJECT-NAME and PROJECT-ID."
+  (goto-char (point-max))
+  (insert (format "* %s\n:PROPERTIES:\n:TICKTICK_PROJECT_ID: %s\n:END:\n" project-name project-id))
+  (point-at-bol))
+
+(defun ticktick--sync-task (task project-pos)
+  "Sync a single TASK under PROJECT-POS, updating or creating as needed."
+  (let* ((id (plist-get task :id))
+         (etag (plist-get task :etag))
+         (existing-pos (ticktick--find-task-under-project project-pos id)))
+    (if existing-pos
+        (save-excursion
+          (goto-char existing-pos)
+          (let ((existing-etag (org-entry-get nil "TICKTICK_ETAG")))
+            (unless (string= existing-etag etag)
+              (delete-region (org-entry-beginning-position)
+                             (org-entry-end-position))
+              (insert (ticktick--task-to-heading task))
+              (ticktick--update-sync-meta))))
+      (save-excursion
+        (goto-char project-pos)
+        (outline-next-heading)
+        (insert (ticktick--task-to-heading task) "\n")
+        (ticktick--update-sync-meta)))))
+
+(defun ticktick--sync-project (project)
+  "Sync a single PROJECT with all its tasks."
+  (let* ((project-id (plist-get project :id))
+         (project-name (plist-get project :name))
+         (project-heading-re (format "^\\* %s$" (regexp-quote project-name)))
+         (project-pos (save-excursion
+                        (goto-char (point-min))
+                        (when (re-search-forward project-heading-re nil t)
+                          (match-beginning 0)))))
+    (unless project-pos
+      (setq project-pos (ticktick--create-project-heading project-name project-id)))
+    (goto-char project-pos)
+    (outline-show-subtree)
+    (let* ((project-data (ticktick-request "GET" (format "/open/v1/project/%s/data" project-id)))
+           (tasks (plist-get project-data :tasks)))
+      (dolist (task tasks)
+        (ticktick--sync-task task project-pos)))))
+
+(defun ticktick--update-task (task project-id id)
+  "Update existing task with TASK data, PROJECT-ID, and ID."
+  (ticktick-request "POST" (format "/open/v1/task/%s" id)
+                    (append task `(("projectId" . ,project-id))))
+  (ticktick--update-sync-meta)
+  (message "Updated: %s" (alist-get "title" task)))
+
+(defun ticktick--create-task (task project-id)
+  "Create new task with TASK data and PROJECT-ID."
+  (let ((resp (ticktick-request "POST" "/open/v1/task"
+                                (append task `(("projectId" . ,project-id))))))
+    (when resp
+      (org-set-property "TICKTICK_ID" (plist-get resp :id))
+      (org-set-property "TICKTICK_ETAG" (plist-get resp :etag))
+      (ticktick--update-sync-meta)
+      (message "Created: %s" (plist-get resp :title)))))
+
 (defun ticktick--find-task-under-project (project-heading id)
   "Return position of task heading with ID under PROJECT-HEADING."
   (save-excursion
@@ -419,40 +480,8 @@ DATA is an alist of data to send with the request."
     (with-current-buffer (find-file-noselect ticktick-sync-file)
       (org-with-wide-buffer
        (dolist (project projects)
-         (let* ((project-id (plist-get project :id))
-                (project-name (plist-get project :name))
-                (project-heading-re (format "^\\* %s$" (regexp-quote project-name)))
-                (project-pos (save-excursion
-                               (goto-char (point-min))
-                               (when (re-search-forward project-heading-re nil t)
-                                 (match-beginning 0)))))
-           (unless project-pos
-             (goto-char (point-max))
-             (insert (format "* %s\n:PROPERTIES:\n:TICKTICK_PROJECT_ID: %s\n:END:\n" project-name project-id))
-             (setq project-pos (point-at-bol)))
-           (goto-char project-pos)
-           (outline-show-subtree)
-           (let* ((project-data (ticktick-request "GET" (format "/open/v1/project/%s/data" project-id)))
-                  (tasks (plist-get project-data :tasks)))
-             (dolist (task tasks)
-               (let* ((id (plist-get task :id))
-                      (etag (plist-get task :etag))
-                      (existing-pos (ticktick--find-task-under-project project-pos id)))
-                 (if existing-pos
-                     (save-excursion
-                       (goto-char existing-pos)
-                       (let ((existing-etag (org-entry-get nil "TICKTICK_ETAG")))
-                         (unless (string= existing-etag etag)
-                           (delete-region (org-entry-beginning-position)
-                                          (org-entry-end-position))
-                           (insert (ticktick--task-to-heading task))
-                           (ticktick--update-sync-meta))))
-                   (save-excursion
-                     (goto-char project-pos)
-                     (outline-next-heading)
-                     (insert (ticktick--task-to-heading task) "\n")
-                     (ticktick--update-sync-meta))))))))
-       (save-buffer)))))
+         (ticktick--sync-project project))
+       (save-buffer))))
 
 (defun ticktick-push-from-org ()
   "Push all updated org tasks back to TickTick."
@@ -468,18 +497,8 @@ DATA is an alist of data to send with the request."
                   (project-id (org-entry-get nil "TICKTICK_PROJECT_ID" t))
                   (id (org-entry-get nil "TICKTICK_ID")))
              (if (and id (not (string-empty-p id)))
-                 (progn
-                   (ticktick-request "POST" (format "/open/v1/task/%s" id)
-                                     (append task `(("projectId" . ,project-id))))
-                   (ticktick--update-sync-meta)
-                   (message "Updated: %s" (alist-get "title" task)))
-               (let ((resp (ticktick-request "POST" "/open/v1/task"
-                                             (append task `(("projectId" . ,project-id))))))
-                 (when resp
-                   (org-set-property "TICKTICK_ID" (plist-get resp :id))
-                   (org-set-property "TICKTICK_ETAG" (plist-get resp :etag))
-                   (ticktick--update-sync-meta)
-                   (message "Created: %s" (plist-get resp :title)))))))))))
+                 (ticktick--update-task task project-id id)
+               (ticktick--create-task task project-id))))))
      (save-buffer))
 
 
