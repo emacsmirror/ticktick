@@ -1,9 +1,25 @@
 ;;; ticktick.el --- Sync tasks between TickTick and Emacs / Org Mode -*- lexical-binding: t; -*-
 
 ;; Author: Paul Huang
+;; Version: 1.0.0
 ;; Package-Requires: ((emacs "26.1") (request "0.3.0") (simple-httpd "1.5.0"))
 ;; Keywords: tools, ticktick, org, tasks, todo
 ;; URL: https://github.com/polhuang/ticktick.el
+
+;; This file is not part of GNU Emacs.
+
+;; This program is free software; you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+
+;; You should have received a copy of the GNU General Public License
+;; along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 ;;; Commentary:
 ;; 
@@ -32,12 +48,12 @@
 ;;    M-x ticktick-authorize
 ;;
 ;; 4. Perform initial sync:
-;;    M-x ticktick-sync-two-way
+;;    M-x ticktick-sync
 ;;
 ;; USAGE:
 ;;
 ;; Main commands:
-;; - `ticktick-sync-two-way': Full bidirectional sync
+;; - `ticktick-sync': Full bidirectional sync
 ;; - `ticktick-fetch-to-org': Pull tasks from TickTick to Org
 ;; - `ticktick-push-from-org': Push Org tasks to TickTick
 ;; - `ticktick-authorize': Set up OAuth authentication
@@ -552,7 +568,7 @@ DATA is an alist of data to send with the request."
      (save-buffer))))
 
 
-(defun ticktick-sync-two-way ()
+(defun ticktick-sync ()
   "Two-way sync: push local changes first, then fetch remote updates."
   (interactive)
   (ticktick-push-from-org)
@@ -562,7 +578,7 @@ DATA is an alist of data to send with the request."
   "Autosync if enabled."
   (when ticktick--autosync
     (when (file-exists-p ticktick-sync-file)
-      (ignore-errors (ticktick-sync-two-way)))))
+      (ignore-errors (ticktick-sync)))))
 
 (defun ticktick--setup-sync-timer ()
   "Set up or tear down the sync timer based on `ticktick-sync-interval'."
@@ -590,7 +606,7 @@ When set to a positive number, TickTick will sync automatically every N minutes.
 (defun ticktick--timer-sync ()
   "Sync function called by timer."
   (when (file-exists-p ticktick-sync-file)
-    (ignore-errors (ticktick-sync-two-way))))
+    (ignore-errors (ticktick-sync))))
 
 ;;;###autoload
 (defun ticktick-toggle-sync-timer ()
