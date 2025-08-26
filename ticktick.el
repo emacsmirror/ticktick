@@ -23,7 +23,7 @@
 
 ;;; Commentary:
 ;; 
-;; ticktick.el provides seamless two-way synchronization between TickTick
+;; ticktick.el provides two-way synchronization between TickTick
 ;; (a popular task management service) and Emacs Org Mode.
 ;;
 ;; FEATURES:
