@@ -39,6 +39,8 @@ ticktick.el enables two-way synchronization between [TickTick](https://ticktick.
       ticktick-client-secret "your-client-secret")
 ```
 
+Instead of hard-coding your client secret into your configuration, storing it with [auth-source](https://www.gnu.org/software/emacs/manual/html_mono/auth.html) is recommended.
+
 ### 3. Authorize Application
 
 ```
@@ -130,7 +132,7 @@ M-x ticktick-toggle-sync-timer
 
 ### Creating Tasks
 
-Create tasks directly in your org file under any project heading:
+Create tasks by just adding a `TODO` heading directly in your org file under any project heading:
 
 ```org
 * Work Project
@@ -146,55 +148,17 @@ Run `M-x ticktick-push-from-org` to sync to TickTick.
 
 ### Task Priorities
 
-- `[#A]` � High priority
-- `[#B]` � Normal priority  
-- `[#C]` � Low priority
-- No priority � Normal priority
+Org priorities are mapped to TickTick priorities.
+
+- `[#A]` - High priority
+- `[#B]` - Normal priority  
+- `[#C]` - Low priority
+- No priority - Normal priority
 
 ### Task Status
 
-- `TODO` � Open task
-- `DONE` � Completed task
-
-## Troubleshooting
-
-### OAuth Issues
-
-If authorization fails:
-
-1. Check your credentials:
-   ```
-   M-x ticktick-debug-oauth
-   ```
-
-2. Ensure your redirect URI matches exactly: `http://localhost:8080/ticktick-callback`
-
-3. Try manual authorization:
-   ```
-   M-x ticktick-authorize-manual
-   ```
-
-### Sync Issues
-
-- **Tasks not syncing**: Check if `ticktick-sync-file` exists and is writable
-- **Duplicate tasks**: Clear sync cache with `M-x ticktick-force-full-sync`
-- **Token expired**: Run `M-x ticktick-refresh-token`
-
-### Debug Information
-
-View current sync status:
-```
-M-x ticktick-show-sync-status
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature-name`
-3. Make your changes and add tests
-4. Commit with clear messages: `git commit -m "Add feature X"`
-5. Push to your fork: `git push origin feature-name`
-6. Create a Pull Request
+- `TODO` - Open task
+- `DONE` - Completed task
 
 ## License
 
@@ -204,6 +168,6 @@ See [LICENSE](LICENSE) for full details.
 
 ## Acknowledgments
 
-- Built on top of the excellent [request.el](https://github.com/tkf/emacs-request) library
+- Built on top of [request.el](https://github.com/tkf/emacs-request) library
 - Uses [simple-httpd](https://github.com/skeeto/emacs-simple-httpd) for OAuth callbacks
-- Inspired by other Emacs-based task management solutions
+
