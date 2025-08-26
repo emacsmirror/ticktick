@@ -68,7 +68,7 @@
   :type 'file
   :group 'ticktick)
 
-(defcustom ticktick-org-file nil
+(defcustom ticktick-org-file "ticktick.org"
   "Org file to sync with TickTick. If nil, uses current buffer when syncing."
   :type '(choice (const :tag "Current buffer" nil)
                  (file :tag "Org file"))
@@ -764,7 +764,62 @@ Returns a plist with :org-wins and :ticktick-wins changes."
                  final-org-snapshot
                  (ticktick--create-ticktick-snapshot final-ticktick-tasks)))
               
-              (message "TickTick: Sync completed successfully")))))))
+              (message "TickTick: Sync completed successfully"))))))))
+
+;;; Additional utilities -------------------------------------------------------
+
+;;;###autoload
+(defun ticktick-clear-snapshots ()
+  "Clear all stored snapshots and force a full sync on next run."
+  (interactive)
+  (setq ticktick-snapshots nil)
+  (when (file-exists-p ticktick-snapshots-file)
+    (delete-file ticktick-snapshots-file))
+  (message "TickTick: Snapshots cleared. Next sync will be a full sync."))
+
+;;;###autoload
+(defun ticktick-show-sync-status ()
+  "Show current sync status and snapshot information."
+  (interactive)
+  (let ((snapshots (ticktick--get-current-snapshots)))
+    (with-output-to-temp-buffer "*TickTick Sync Status*"
+      (princ "=== TickTick Sync Status ===\n\n")
+      
+      (let ((org-snapshot (plist-get snapshots :org))
+            (ticktick-snapshot (plist-get snapshots :ticktick))
+            (sync-timestamp (plist-get snapshots :sync-timestamp)))
+        
+        (if sync-timestamp
+            (princ (format "Last sync: %s\n\n" 
+                          (format-time-string "%Y-%m-%d %H:%M:%S" 
+                                            (seconds-to-time sync-timestamp))))
+          (princ "No previous sync found\n\n"))
+        
+        (if org-snapshot
+            (let ((org-tasks (plist-get org-snapshot :tasks)))
+              (princ (format "Org snapshot: %d tasks\n" (length org-tasks)))
+              (princ (format "Org file: %s\n" (plist-get org-snapshot :file)))
+              (princ (format "Org timestamp: %s\n" 
+                            (format-time-string "%Y-%m-%d %H:%M:%S" 
+                                              (seconds-to-time (plist-get org-snapshot :timestamp))))))
+          (princ "No org snapshot found\n"))
+        
+        (princ "\n")
+        
+        (if ticktick-snapshot
+            (let ((tt-tasks (plist-get ticktick-snapshot :tasks)))
+              (princ (format "TickTick snapshot: %d tasks\n" (length tt-tasks)))
+              (princ (format "TickTick timestamp: %s\n" 
+                            (format-time-string "%Y-%m-%d %H:%M:%S" 
+                                              (seconds-to-time (plist-get ticktick-snapshot :timestamp))))))
+          (princ "No TickTick snapshot found\n"))))))
+
+;;;###autoload
+(defun ticktick-force-full-sync ()
+  "Force a full bidirectional sync, ignoring snapshots."
+  (interactive)
+  (ticktick-clear-snapshots)
+  (ticktick-sync))
 
 (provide 'ticktick)
 ;;; ticktick.el ends here
