@@ -344,6 +344,17 @@ Starts a local server, opens the browser for consent, then captures the redirect
 
 ;;; Core request ---------------------------------------------------------------
 
+(defun ticktick--parse-json-maybe ()
+  "Parse current buffer as JSON if non-empty; otherwise return nil."
+  (goto-char (point-min))
+  (let ((json-object-type 'plist)
+        (json-array-type 'list)
+        (json-false :false))
+    (if (zerop (buffer-size))
+        nil
+      (condition-case _ (json-read)
+        (json-error nil)))))
+
 (defun ticktick-request (method endpoint &optional data)
   "Send a request to the TickTick API.
 METHOD is the HTTP method as a string.
@@ -360,22 +371,20 @@ DATA is an alist of data to send with the request."
                         :type method
                         :headers headers
                         :data json-data
-                        :parser (lambda ()
-                                  (let ((json-object-type 'plist)
-                                        (json-array-type 'list))
-                                    (json-read)))
+                        :parser #'ticktick--parse-json-maybe
                         :sync t
-                        :success (cl-function 
+                        :success (cl-function
                                   (lambda (&key data response &allow-other-keys)
-                                    (let ((status-code (request-response-status-code response)))
+                                    (let ((status (request-response-status-code response)))
                                       (cond
-                                       ((and (>= status-code 200) (< status-code 300))
+                                       ((and (>= status 200) (< status 300))
+                                        ;; data may be nil on 204, and that's OK
                                         (setq response-data data))
-                                       ((= status-code 401)
+                                       ((= status 401)
                                         (ticktick-refresh-token)
                                         (setq response-data (ticktick-request method endpoint data)))
                                        (t
-                                        (error "HTTP Error %s" status-code))))))
+                                        (error "HTTP Error %s" status))))))
                         :error (cl-function 
                                 (lambda (&key response error-thrown &allow-other-keys)
                                   (let ((status-code (and response (request-response-status-code response))))
@@ -447,22 +456,36 @@ DATA is an alist of data to send with the request."
                                           (org-timestamp-to-time deadline))))
       ("content" . ,content))))
 
+(defun ticktick--subtree-body-for-hash ()
+  "Return a stable string of the current subtree, with volatile props removed."
+  (let* ((raw (buffer-substring-no-properties
+               (org-entry-beginning-position) (org-entry-end-position))))
+    (with-temp-buffer
+      (insert raw)
+      (goto-char (point-min))
+      ;; Remove property drawers entirely
+      (while (re-search-forward "^:PROPERTIES:\n\\(?:.*\n\\)*?:END:\n?" nil t)
+        (replace-match "" nil nil))
+      ;; Remove any stray volatile property lines (if not in a drawer)
+      (goto-char (point-min))
+      (while (re-search-forward
+              "^:\\(LAST_SYNCED\\|SYNC_CACHE\\|TICKTICK_ETAG\\|TICKTICK_ID\\):.*\n" nil t)
+        (replace-match "" nil nil))
+      (buffer-string))))
+
 (defun ticktick--should-sync-p ()
   "Return non-nil if the current subtree changed since last sync."
-  (let* ((etag (org-entry-get nil "TICKTICK_ETAG"))
+  (let* ((etag   (org-entry-get nil "TICKTICK_ETAG"))
          (cached (org-entry-get nil "SYNC_CACHE"))
-         (body (buffer-substring-no-properties
-                (org-entry-beginning-position)
-                (org-entry-end-position)))
-         (changed (not (string= cached (secure-hash 'sha1 body)))))
-    (or (not etag) changed)))
+         (digest (secure-hash 'sha1 (ticktick--subtree-body-for-hash))))
+    (or (not etag) (not (and cached (string= cached digest))))))
 
 (defun ticktick--update-sync-meta ()
   "Set sync hash and time on current subtree."
-  (let ((body (buffer-substring-no-properties (org-entry-beginning-position)
-                                              (org-entry-end-position))))
+  (let* ((digest (secure-hash 'sha1 (ticktick--subtree-body-for-hash))))
     (org-set-property "LAST_SYNCED" (format-time-string "%Y-%m-%dT%H:%M:%S%z"))
-    (org-set-property "SYNC_CACHE" (secure-hash 'sha1 body))))
+    (org-set-property "SYNC_CACHE"  digest)))
+
 
 ;;; Sync functions -------------------------------------------------------------
 

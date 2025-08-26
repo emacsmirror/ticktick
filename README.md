@@ -59,7 +59,7 @@ M-x ticktick-sync
 
 | Command | Description |
 |---------|-------------|
-| `ticktick-sync` | Full bidirectional sync (recommended) |
+| `ticktick-sync` | Full bidirectional sync |
 | `ticktick-fetch-to-org` | Pull tasks from TickTick to Org |
 | `ticktick-push-from-org` | Push Org tasks to TickTick |
 | `ticktick-authorize` | Set up OAuth authentication |
