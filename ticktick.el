@@ -160,6 +160,77 @@
               :sync-timestamp (float-time)))
   (ticktick--save-snapshots))
 
+;;; Org file parsing and diffing -----------------------------------------------
+
+(defun ticktick--parse-org-tasks ()
+  "Parse org tasks from current buffer and return a list of task plists."
+  (let ((tasks '()))
+    (org-map-entries
+     (lambda ()
+       (let* ((heading (org-get-heading t t t t))
+              (todo-state (org-get-todo-state))
+              (tags (org-get-tags))
+              (scheduled (org-get-scheduled-time (point)))
+              (deadline (org-get-deadline-time (point)))
+              (id (org-id-get-create))
+              (priority (org-get-priority))
+              (content (save-excursion
+                        (org-back-to-heading t)
+                        (let ((start (point)))
+                          (org-end-of-subtree)
+                          (buffer-substring-no-properties start (point))))))
+         (push (list :id id
+                     :heading heading
+                     :todo-state todo-state
+                     :tags tags
+                     :scheduled scheduled
+                     :deadline deadline
+                     :priority priority
+                     :content content
+                     :content-hash (secure-hash 'md5 content))
+               tasks)))
+     t 'file)
+    (nreverse tasks)))
+
+(defun ticktick--normalize-task (task)
+  "Normalize a TASK for comparison by removing position-dependent fields."
+  (let ((normalized (copy-sequence task)))
+    (plist-put normalized :content nil)
+    normalized))
+
+(defun ticktick--find-task-by-id (task-id tasks)
+  "Find a task with TASK-ID in TASKS list."
+  (cl-find-if (lambda (task) (string= (plist-get task :id) task-id)) tasks))
+
+(defun ticktick--task-changed-p (old-task new-task)
+  "Check if NEW-TASK has changed compared to OLD-TASK."
+  (not (equal (ticktick--normalize-task old-task)
+              (ticktick--normalize-task new-task))))
+
+(defun ticktick--diff-org-tasks (old-tasks new-tasks)
+  "Compare OLD-TASKS with NEW-TASKS and return changes.
+Returns a plist with :added, :modified, :deleted lists."
+  (let ((added '())
+        (modified '())
+        (deleted '()))
+    
+    (dolist (new-task new-tasks)
+      (let* ((task-id (plist-get new-task :id))
+             (old-task (ticktick--find-task-by-id task-id old-tasks)))
+        (if old-task
+            (when (ticktick--task-changed-p old-task new-task)
+              (push (list :old old-task :new new-task) modified))
+          (push new-task added))))
+    
+    (dolist (old-task old-tasks)
+      (let ((task-id (plist-get old-task :id)))
+        (unless (ticktick--find-task-by-id task-id new-tasks)
+          (push old-task deleted))))
+    
+    (list :added (nreverse added)
+          :modified (nreverse modified)
+          :deleted (nreverse deleted))))
+
 ;;; Authorization functions ----------------------------------------------------
 
 (defun ticktick--authorization-header ()
