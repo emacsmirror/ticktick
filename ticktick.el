@@ -80,6 +80,9 @@
 (defvar ticktick-oauth-state nil
   "CSRF-prevention state for the OAuth flow.")
 
+(defvar ticktick-snapshots nil
+  "Cached snapshots data for incremental sync.")
+
 ;; --- Token persistence helpers (optional but handy) --------------------------
 (defun ticktick--ensure-dir ()
   (unless (file-directory-p ticktick-dir)
@@ -102,6 +105,60 @@
 
 ;; Load any existing token at startup
 (ticktick--load-token)
+
+;;; Snapshot management --------------------------------------------------------
+
+(defun ticktick--save-snapshots ()
+  "Persist `ticktick-snapshots` to `ticktick-snapshots-file`."
+  (when ticktick-snapshots
+    (ticktick--ensure-dir)
+    (with-temp-file ticktick-snapshots-file
+      (insert (prin1-to-string ticktick-snapshots)))))
+
+(defun ticktick--load-snapshots ()
+  "Load snapshots from `ticktick-snapshots-file` into `ticktick-snapshots`."
+  (when (file-exists-p ticktick-snapshots-file)
+    (with-temp-buffer
+      (insert-file-contents ticktick-snapshots-file)
+      (goto-char (point-min))
+      (setq ticktick-snapshots (read (current-buffer))))))
+
+(defun ticktick--get-org-file-path ()
+  "Get the org file path to sync. Uses `ticktick-org-file` or current buffer."
+  (or ticktick-org-file
+      (and (derived-mode-p 'org-mode) (buffer-file-name))
+      (user-error "No org file specified and current buffer is not an org file")))
+
+(defun ticktick--create-org-snapshot (org-file-path)
+  "Create a snapshot of the org file at ORG-FILE-PATH."
+  (with-temp-buffer
+    (insert-file-contents org-file-path)
+    (let ((tasks (ticktick--parse-org-tasks)))
+      (list :file org-file-path
+            :timestamp (float-time)
+            :tasks tasks
+            :content-hash (secure-hash 'md5 (current-buffer))))))
+
+(defun ticktick--create-ticktick-snapshot (tasks)
+  "Create a snapshot of TickTick TASKS."
+  (list :timestamp (float-time)
+        :tasks tasks
+        :tasks-hash (secure-hash 'md5 (prin1-to-string tasks))))
+
+(defun ticktick--get-current-snapshots ()
+  "Get current snapshots, loading from file if not in memory."
+  (unless ticktick-snapshots
+    (ticktick--load-snapshots))
+  (or ticktick-snapshots
+      (list :org nil :ticktick nil :sync-timestamp nil)))
+
+(defun ticktick--update-snapshots (org-snapshot ticktick-snapshot)
+  "Update snapshots with new ORG-SNAPSHOT and TICKTICK-SNAPSHOT."
+  (setq ticktick-snapshots
+        (list :org org-snapshot
+              :ticktick ticktick-snapshot
+              :sync-timestamp (float-time)))
+  (ticktick--save-snapshots))
 
 ;;; Authorization functions ----------------------------------------------------
 
