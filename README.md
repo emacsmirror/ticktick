@@ -171,5 +171,5 @@ See [LICENSE](LICENSE) for full details.
 ## Acknowledgments
 
 - Built on top of [request.el](https://github.com/tkf/emacs-request) library
-- Uses [simple-httpd](https://github.com/skeeto/emacs-simple-httpd) for OAuth callbacks
+- Uses [simple-httpd](https://github.com/skeeto/emacs-web-server) for OAuth callbacks
 
