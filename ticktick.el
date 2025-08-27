@@ -82,7 +82,7 @@
 ;; Key variables you can customize:
 ;; - `ticktick-sync-file': Path to the org file for tasks
 ;; - `ticktick-dir': Directory for storing tokens and data
-;; - `ticktick--autosync': Enable automatic syncing on focus changes
+;; - `ticktick-autosync': Enable automatic syncing on focus changes
 ;; - `ticktick-sync-interval': Enable automatic syncing every N minutes
 ;; - `ticktick-httpd-port': Port for OAuth callback server
 ;;
@@ -95,6 +95,7 @@
 (require 'json)
 (require 'url)
 (require 'org)
+(require 'org-element)
 (require 'subr-x)
 (require 'simple-httpd)
 (require 'cl-lib)
@@ -138,7 +139,7 @@
   :group 'ticktick)
 
 
-(defcustom ticktick--autosync nil
+(defcustom ticktick-autosync nil
   "If non-nil, automatically sync when switching buffers or losing focus."
   :type 'boolean
   :group 'ticktick)
@@ -152,6 +153,16 @@
   "Redirect URI registered with TickTick. Must match OAuth app settings."
   :type 'string
   :group 'ticktick)
+
+(defcustom ticktick-sync-interval nil
+  "Interval in minutes for automatic syncing. If nil, timer-based sync is disabled.
+When set to a positive number, TickTick will sync automatically every N minutes."
+  :type '(choice (const :tag "Disabled" nil)
+                 (integer :tag "Minutes"))
+  :group 'ticktick
+  :set (lambda (symbol value)
+         (set-default symbol value)
+         (ticktick--setup-sync-timer)))
 
 (defvar ticktick-token nil
   "Access token plist for accessing the TickTick API.")
@@ -423,7 +434,7 @@ Starts local server, requests consent through browser, then captures redirect."
                     (pcase priority (5 " [#A]") (3 " [#B]") (1 " [#C]") (_ ""))
                     title)
             (when due
-              (format "DEADLINE: <%s>" (format-time-string "%Y-%m-%d %a" (date-to-time due))))
+              (format "DEADLINE: <%s>" (format-time-string "%F %a" (date-to-time due))))
             ":PROPERTIES:"
             (format ":TICKTICK_ID: %s" id)
             (format ":TICKTICK_ETAG: %s" (or etag ""))
@@ -456,7 +467,7 @@ Starts local server, requests consent through browser, then captures redirect."
       ("status" . ,(if (eq todo 'done) 2 0))
       ("priority" . ,(pcase priority (?A 5) (?B 3) (?C 1) (_ 0)))
       ("dueDate" . ,(when deadline
-                      (format-time-string "%Y-%m-%dT%H:%M:%S+0000"
+                      (format-time-string "%FT%T+0000"
                                           (org-timestamp-to-time deadline))))
       ("content" . ,content))))
 
@@ -487,20 +498,19 @@ Starts local server, requests consent through browser, then captures redirect."
 (defun ticktick--update-sync-meta ()
   "Set sync hash and time on current subtree."
   (let* ((digest (secure-hash 'sha1 (ticktick--subtree-body-for-hash))))
-    (org-set-property "LAST_SYNCED" (format-time-string "%Y-%m-%dT%H:%M:%S%z"))
+    (org-set-property "LAST_SYNCED" (format-time-string "%FT%T%z"))
     (org-set-property "SYNC_CACHE"  digest)))
-
 
 ;;; Sync functions -------------------------------------------------------------
 
-(defun ticktick--create-project-heading (project-name project-id)
+(defun ticktick--create-project-heading (project-title project-id)
   "Insert a new Org heading for PROJECT-NAME with PROJECT-ID.
 Return the buffer position at the start of the heading."
   (goto-char (point-max))
   (unless (bolp) (insert "\n"))            ; ensure we start on a fresh line
   (let ((start (point)))                   ; this will be the heading's start
     (insert (format "* %s\n:PROPERTIES:\n:TICKTICK_PROJECT_ID: %s\n:END:\n"
-                    project-name project-id))
+                    project-title project-id))
     start))
 
 
@@ -527,14 +537,14 @@ Return the buffer position at the start of the heading."
 (defun ticktick--sync-project (project)
   "Sync a single PROJECT with all its tasks."
   (let* ((project-id (plist-get project :id))
-         (project-name (plist-get project :name))
-         (project-heading-re (format "^\\* %s$" (regexp-quote project-name)))
+         (project-title (plist-get project :name))
+         (project-heading-re (format "^\\* %s$" (regexp-quote project-title)))
          (project-pos (save-excursion
                         (goto-char (point-min))
                         (when (re-search-forward project-heading-re nil t)
                           (match-beginning 0)))))
     (unless project-pos
-      (setq project-pos (ticktick--create-project-heading project-name project-id)))
+      (setq project-pos (ticktick--create-project-heading project-title project-id)))
     (goto-char project-pos)
     (outline-show-subtree)
     (let* ((project-data (ticktick-request "GET" (format "/open/v1/project/%s/data" project-id)))
@@ -611,7 +621,7 @@ Return the buffer position at the start of the heading."
 
 (defun ticktick--autosync ()
   "Autosync if enabled."
-  (when ticktick--autosync
+  (when ticktick-autosync
     (when (file-exists-p ticktick-sync-file)
       (ignore-errors (ticktick-sync)))))
 
@@ -628,15 +638,7 @@ Return the buffer position at the start of the heading."
                        (* ticktick-sync-interval 60)
                        #'ticktick--timer-sync))))
 
-(defcustom ticktick-sync-interval nil
-  "Interval in minutes for automatic syncing. If nil, timer-based sync is disabled.
-When set to a positive number, TickTick will sync automatically every N minutes."
-  :type '(choice (const :tag "Disabled" nil)
-                 (integer :tag "Minutes"))
-  :group 'ticktick
-  :set (lambda (symbol value)
-         (set-default symbol value)
-         (ticktick--setup-sync-timer)))
+
 
 (defun ticktick--timer-sync ()
   "Sync function called by timer."
@@ -689,7 +691,6 @@ When set to a positive number, TickTick will sync automatically every N minutes.
     (with-suppressed-warnings ((obsolete focus-out-hook))
       (remove-hook 'focus-out-hook #'ticktick--autosync))))
 
-(add-hook 'window-buffer-change-functions (lambda (&rest _) (ticktick--autosync)))
 
 (provide 'ticktick)
 ;;; ticktick.el ends here
