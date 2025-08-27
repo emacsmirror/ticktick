@@ -118,7 +118,8 @@
   "Space-separated scopes for TickTick API access."
   :type 'string
   :group 'ticktick)
- 
+
+
 (defcustom ticktick-dir
   (concat user-emacs-directory "ticktick/") 
   "Folder in which to save token."
