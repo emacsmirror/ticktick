@@ -122,7 +122,7 @@
 
 
 (defcustom ticktick-dir
-  (concat user-emacs-directory "ticktick/") 
+  (concat user-emacs-directory "ticktick/")
   "Folder in which to save token."
   :group 'ticktick
   :type 'string)
@@ -375,7 +375,8 @@ Starts local server, requests consent through browser, then captures redirect."
 
 (defun ticktick-request (method endpoint &optional data)
   "Send a request to the TickTick API.
-METHOD is the HTTP method to use (GET, POST, etc.)."
+METHOD is the HTTP method to use (GET, POST, etc.).
+ENDPOINT is the API endpoint to request."
   (ticktick-ensure-token)
   (let* ((url (concat "https://api.ticktick.com" endpoint))
          (access-token (plist-get ticktick-token :access_token))
@@ -637,8 +638,6 @@ Return the buffer position at the start of the heading."
           (run-at-time ticktick-sync-interval
                        (* ticktick-sync-interval 60)
                        #'ticktick--timer-sync))))
-
-
 
 (defun ticktick--timer-sync ()
   "Sync function called by timer."
