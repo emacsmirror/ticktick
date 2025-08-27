@@ -1,4 +1,4 @@
-;;; ticktick.el --- Sync tasks between TickTick and Emacs / Org Mode -*- lexical-binding: t; -*-
+;;; ticktick.el --- Sync Org Mode tasks with TickTick -*- lexical-binding: t; -*-
 
 ;; Author: Paul Huang
 ;; Version: 1.0.0
@@ -60,7 +60,7 @@
 ;; - `ticktick-refresh-token': Manually refresh auth token
 ;; - `ticktick-toggle-sync-timer': Toggle automatic timer-based syncing
 ;;
-;; Tasks are stored in the file specified by `ticktick-sync-file' 
+;; Tasks are stored in the file specified by `ticktick-sync-file'
 ;; (defaults to ~/.emacs.d/ticktick/ticktick.org) with this structure:
 ;;
 ;; * Project Name
@@ -156,13 +156,11 @@
 
 (defcustom ticktick-sync-interval nil
   "Interval in minutes for automatic syncing. If nil, timer-based sync is disabled.
-When set to a positive number, TickTick will sync automatically every N minutes."
+When set to a positive number, TickTick will sync automatically every N minutes.
+After changing this value, call `ticktick-toggle-sync-timer' to apply changes."
   :type '(choice (const :tag "Disabled" nil)
                  (integer :tag "Minutes"))
-  :group 'ticktick
-  :set (lambda (symbol value)
-         (set-default symbol value)
-         (ticktick--setup-sync-timer)))
+  :group 'ticktick)
 
 (defvar ticktick-token nil
   "Access token plist for accessing the TickTick API.")
@@ -201,6 +199,7 @@ When set to a positive number, TickTick will sync automatically every N minutes.
 ;;; Authorization functions ----------------------------------------------------
 
 (defun ticktick--authorization-header ()
+  "Create basic authentication header for TickTick API."
   (concat "Basic "
           (base64-encode-string
            (concat ticktick-client-id ":" ticktick-client-secret) t)))
@@ -300,7 +299,7 @@ Starts local server, requests consent through browser, then captures redirect."
   (interactive)
   (unless (and (stringp ticktick-client-id) (not (string-empty-p ticktick-client-id))
                (stringp ticktick-client-secret) (not (string-empty-p ticktick-client-secret)))
-    (user-error "ticktick-client-id and ticktick-client-secret must be set"))
+    (user-error "Ticktick-client-id and ticktick-client-secret must be set"))
   (ticktick--start-callback-server)
   (setq ticktick-oauth-state (format "%06x" (random (expt 16 6))))
   (let* ((auth-url (concat "https://ticktick.com/oauth/authorize?"
@@ -323,7 +322,7 @@ Starts local server, requests consent through browser, then captures redirect."
           (setq ticktick-token tok)
           (ticktick--save-token)
           (message "Authorization successful!"))
-      (user-error "Failed to obtain access token."))))
+      (user-error "Failed to obtain access token"))))
 
 ;;; Token maintenance ----------------------------------------------------------
 
@@ -375,7 +374,8 @@ Starts local server, requests consent through browser, then captures redirect."
         (json-error nil)))))
 
 (defun ticktick-request (method endpoint &optional data)
-  "Send a request to the TickTick API."
+  "Send a request to the TickTick API.
+METHOD is the HTTP method to use (GET, POST, etc.)."
   (ticktick-ensure-token)
   (let* ((url (concat "https://api.ticktick.com" endpoint))
          (access-token (plist-get ticktick-token :access_token))
@@ -504,7 +504,7 @@ Starts local server, requests consent through browser, then captures redirect."
 ;;; Sync functions -------------------------------------------------------------
 
 (defun ticktick--create-project-heading (project-title project-id)
-  "Insert a new Org heading for PROJECT-NAME with PROJECT-ID.
+  "Insert a new Org heading for PROJECT-TITLE with PROJECT-ID.
 Return the buffer position at the start of the heading."
   (goto-char (point-max))
   (unless (bolp) (insert "\n"))            ; ensure we start on a fresh line
@@ -662,8 +662,6 @@ Return the buffer position at the start of the heading."
           (message "TickTick timer sync enabled (every %d minutes)" ticktick-sync-interval))
       (message "Set ticktick-sync-interval to enable timer sync"))))
 
-;; Initialize timer on load
-(ticktick--setup-sync-timer)
 
 ;; Run autosync when frame loses focus
 
