@@ -94,12 +94,10 @@
 (require 'request)
 (require 'json)
 (require 'url)
-(require 'seq)
-(require 'tabulated-list)
 (require 'org)
-(require 'subr-x)       ;; for string-blank-p, etc.
-(require 'simple-httpd) ;; tiny local HTTP server
-(require 'cl-lib)       ;; for cl-find
+(require 'subr-x)
+(require 'simple-httpd)
+(require 'cl-lib)
 
 (defgroup ticktick nil
   "Interface with TickTick API."
@@ -120,7 +118,7 @@
   "Space-separated scopes for TickTick API access."
   :type 'string
   :group 'ticktick)
-
+ 
 (defcustom ticktick-dir
   (concat user-emacs-directory "ticktick/") 
   "Folder in which to save token."
