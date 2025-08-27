@@ -376,7 +376,8 @@ Starts local server, requests consent through browser, then captures redirect."
 (defun ticktick-request (method endpoint &optional data)
   "Send a request to the TickTick API.
 METHOD is the HTTP method to use (GET, POST, etc.).
-ENDPOINT is the API endpoint to request."
+ENDPOINT is the API endpoint to request.
+DATA is the optional request body data."
   (ticktick-ensure-token)
   (let* ((url (concat "https://api.ticktick.com" endpoint))
          (access-token (plist-get ticktick-token :access_token))
@@ -413,8 +414,6 @@ ENDPOINT is the API endpoint to request."
                                  error-thrown))
                     (setq response-data nil)))))))
     response-data))
-
-
 
 ;;; Org conversion helpers -----------------------------------------------------
 
