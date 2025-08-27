@@ -27,5 +27,5 @@ jobs:
         # RECIPE is your recipe as written for MELPA:
         RECIPE: (ticktick :fetcher github :repo "polhuang/ticktick")
         # set this to false (or remove it) if the package isn't on MELPA:
-        EXIST_OK: true
+        EXIST_OK: false
       run: echo $GITHUB_REF && make -C ~/melpazoid
