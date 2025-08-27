@@ -575,10 +575,12 @@ Return the buffer position at the start of the heading."
 (defun ticktick-fetch-to-org ()
   "Fetch all tasks from TickTick and update org file without duplicating."
   (interactive)
-  (let ((projects (ticktick-request "GET" "/open/v1/project")))
+  (let* ((inbox-project `(:id "inbox" :name "Inbox"))
+         (projects (ticktick-request "GET" "/open/v1/project"))
+         (all-projects (cons inbox-project projects)))
     (with-current-buffer (find-file-noselect ticktick-sync-file)
       (org-with-wide-buffer
-       (dolist (project projects)
+       (dolist (project all-projects)
          (ticktick--sync-project project))
        (save-buffer)))))
 
@@ -605,6 +607,7 @@ Return the buffer position at the start of the heading."
   "Two-way sync: push local changes first, then fetch remote updates."
   (interactive)
   (ticktick-push-from-org)
+  (sit-for 1)
   (ticktick-fetch-to-org))
 
 (defun ticktick--autosync ()
