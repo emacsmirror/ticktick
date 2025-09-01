@@ -14,6 +14,7 @@ ticktick.el enables two-way synchronization between [TickTick](https://ticktick.
 
 ## Installation
 
+### Manual
 1. Clone this repository:
    ```bash
    git clone https://github.com/polhuang/ticktick.el.git
@@ -25,11 +26,21 @@ ticktick.el enables two-way synchronization between [TickTick](https://ticktick.
    (require 'ticktick)
    ```
 
+### From MELPA
+
+Add to your Emacs configuration:
+```elisp
+(use-package ticktick
+  :ensure t)
+
+```
+
+### 
 ## Setup
 
 ### 1. Register TickTick OAuth Application
 
-1. Go to https://developer.ticktick.com/
+1. Go to https://developer.ticktick.com
 2. Create a new OAuth application
 3. Set the redirect URI to: `http://localhost:8080/ticktick-callback`
 4. Note your Client ID and Client Secret
@@ -170,6 +181,5 @@ See [LICENSE](LICENSE) for full details.
 
 ## Acknowledgments
 
-- Built on top of [request.el](https://github.com/tkf/emacs-request) library
+- Uses [request.el](https://github.com/tkf/emacs-request) library for URL requests
 - Uses [simple-httpd](https://github.com/skeeto/emacs-web-server) for OAuth callbacks
-
