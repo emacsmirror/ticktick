@@ -425,14 +425,18 @@ DATA is the optional request body data."
         (priority (plist-get task :priority))
         (due (plist-get task :dueDate))
         (etag (plist-get task :etag))
-        (content (plist-get task :content)))
+        (content (plist-get task :content))
+        (tags (plist-get task :tags)))
     (string-join
      (delq nil
            (list
-            (format "** %s%s %s"
+            (format "** %s%s %s%s"
                     (if (= status 2) "DONE" "TODO")
                     (pcase priority (5 " [#A]") (3 " [#B]") (1 " [#C]") (_ ""))
-                    title)
+                    title
+                    (if (and tags (> (length tags) 0))
+                        (concat " :" (mapconcat #'identity tags ":") ":")
+                      ""))
             (when due
               (format "DEADLINE: <%s>" (format-time-string "%F %a" (date-to-time due))))
             ":PROPERTIES:"
@@ -449,6 +453,7 @@ DATA is the optional request body data."
          (todo (org-element-property :todo-type el))
          (priority (org-element-property :priority el))
          (deadline (org-element-property :deadline el))
+         (tags (org-element-property :tags el))
          (id (org-entry-get nil "TICKTICK_ID"))
          (content
           (save-excursion
@@ -469,6 +474,7 @@ DATA is the optional request body data."
       ("dueDate" . ,(when deadline
                       (format-time-string "%FT%T+0000"
                                           (org-timestamp-to-time deadline))))
+      ("tags" . ,(when tags (vconcat tags)))
       ("content" . ,content))))
 
 (defun ticktick--subtree-body-for-hash ()
