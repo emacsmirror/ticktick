@@ -1,7 +1,7 @@
 ;;; ticktick.el --- Sync Org Mode tasks with TickTick -*- lexical-binding: t; -*-
 
 ;; Author: Paul Huang
-;; Version: 1.0.0
+;; Version: 1.0.1
 ;; Package-Requires: ((emacs "27.1") (request "0.3.0") (simple-httpd "1.5.0"))
 ;; Keywords: tools, ticktick, org, tasks, todo
 ;; URL: https://github.com/polhuang/ticktick.el
@@ -27,13 +27,15 @@
 ;; (a popular task management service) and Emacs Org Mode.
 ;;
 ;; FEATURES:
-;; 
+;;
 ;; - Bidirectional sync: changes in either TickTick or Org Mode are reflected
 ;;   in both systems
 ;; - OAuth2 authentication with automatic token refresh
-;; - Preserves task metadata: priorities, due dates, completion status
+;; - Preserves task metadata: priorities, due dates, completion status,
+;;   descriptions, and tags
 ;; - Project-based organization matching TickTick's structure
 ;; - Optional automatic syncing on focus changes
+;; - Tag synchronization using Org mode's native tag syntax
 ;;
 ;; SETUP:
 ;;
@@ -67,7 +69,7 @@
 ;; :PROPERTIES:
 ;; :TICKTICK_PROJECT_ID: abc123
 ;; :END:
-;; ** TODO Task Title [#A]
+;; ** TODO Task Title [#A]                                    :work:urgent:
 ;; DEADLINE: <2024-01-15 Mon>
 ;; :PROPERTIES:
 ;; :TICKTICK_ID: def456
