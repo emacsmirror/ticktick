@@ -1,5 +1,7 @@
 # ticktick.el
+
 [![MELPA](https://melpa.org/packages/ticktick-badge.svg)](https://melpa.org/#/ticktick)
+[![MELPA Stable](https://stable.melpa.org/packages/ticktick-badge.svg)](https://stable.melpa.org/#/ticktick)
 
 ticktick.el enables two-way synchronization between [TickTick](https://ticktick.com), a popular task management app, and Emacs Org Mode. This is a newer project, so you might wish to [backup your TickTick data](https://help.ticktick.com/articles/7055781405648748544).
 
