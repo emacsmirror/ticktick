@@ -1,4 +1,5 @@
 # ticktick.el
+[![MELPA](https://melpa.org/packages/ticktick-badge.svg)](https://melpa.org/#/ticktick)
 
 ticktick.el enables two-way synchronization between [TickTick](https://ticktick.com), a popular task management app, and Emacs Org Mode. This is a newer project, so you might wish to [backup your TickTick data](https://help.ticktick.com/articles/7055781405648748544).
 
@@ -8,9 +9,10 @@ ticktick.el enables two-way synchronization between [TickTick](https://ticktick.
 
 - **Bidirectional sync**
 - **OAuth2 authentication**
-- **Preserves task metadata**: priorities, due dates, completion status, descriptions
+- **Preserves task metadata**: priorities, due dates, completion status, descriptions, tags
 - **Project-based organization** matching TickTick's structure
 - **Automatic syncing** on focus changes or timer-based intervals
+- **Tag synchronization** using Org mode's native tag syntax
 
 ## Installation
 
@@ -173,13 +175,14 @@ Org priorities are mapped to TickTick priorities.
 - `TODO` - Open task
 - `DONE` - Completed task
 
-## License
+### Tags
 
-This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+Tags are synchronized between TickTick and Org mode using Org's native tag syntax:
 
-See [LICENSE](LICENSE) for full details.
+```org
+** TODO Task with tags [#A]     :work:urgent:
+DEADLINE: <2024-01-20 Sat>
+Task description here.
+```
 
-## Acknowledgments
-
-- Uses [request.el](https://github.com/tkf/emacs-request) library for URL requests
-- Uses [simple-httpd](https://github.com/skeeto/emacs-web-server) for OAuth callbacks
+Tags from TickTick are automatically converted to Org tags, and any tags you add to tasks in Org will be synced back to TickTick.
