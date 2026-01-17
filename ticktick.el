@@ -941,8 +941,18 @@ Return the buffer position at the start of the heading."
        (save-buffer)))))
 
 (defun ticktick-push-from-org ()
-  "Push all updated org tasks back to TickTick."
+  "Push all updated org tasks back to TickTick.
+Also detects and handles tasks deleted from Org since last sync."
   (interactive)
+  ;; Initialize state tracking
+  (ticktick--ensure-state-initialized)
+
+  ;; Detect deletions from Org (tasks that existed before but are gone now)
+  (let ((deleted-ids (ticktick--detect-org-deletions)))
+    (when deleted-ids
+      (ticktick--handle-org-deletions deleted-ids)))
+
+  ;; Push normal updates and new tasks
   (with-current-buffer (find-file-noselect ticktick-sync-file)
     (org-with-wide-buffer
      (goto-char (point-min))
@@ -956,7 +966,15 @@ Return the buffer position at the start of the heading."
              (if (and id (not (string-empty-p id)))
                  (ticktick--update-task task project-id id)
                (ticktick--create-task task project-id))))))
-     (save-buffer))))
+     (save-buffer)))
+
+  ;; Update state with current Org task IDs and project map
+  (let ((current-org-ids (ticktick--collect-org-task-ids))
+        (task-project-map (ticktick--collect-task-project-map)))
+    (plist-put ticktick--sync-state :org-task-ids current-org-ids)
+    (plist-put ticktick--sync-state :task-project-map task-project-map)
+    (plist-put ticktick--sync-state :last-sync-time (format-time-string "%FT%T%z"))
+    (ticktick--save-state)))
 
 
 (defun ticktick-sync ()
