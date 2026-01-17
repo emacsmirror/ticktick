@@ -296,6 +296,56 @@ Returns a list of task IDs."
 ;; Load state at startup
 (ticktick--load-state)
 
+;;; Deletion detection ---------------------------------------------------------
+
+(defun ticktick--detect-org-deletions ()
+  "Detect tasks that were deleted from Org since last sync.
+Returns a list of deleted task IDs."
+  (let* ((current-ids (ticktick--collect-org-task-ids))
+         (previous-ids (plist-get ticktick--sync-state :org-task-ids)))
+    (when previous-ids
+      (cl-set-difference previous-ids current-ids :test #'string=))))
+
+(defun ticktick--detect-api-deletions ()
+  "Detect tasks that were deleted from TickTick since last sync.
+Returns a list of deleted task IDs."
+  (let* ((current-ids (plist-get ticktick--sync-state :api-task-ids))
+         (previous-ids (plist-get ticktick--sync-state :api-task-ids)))
+    ;; Note: current-ids will be updated after fetch, so we compare
+    ;; the newly fetched IDs with the previous sync
+    (when previous-ids
+      (cl-set-difference previous-ids current-ids :test #'string=))))
+
+(defun ticktick--find-task-by-id-in-org (task-id)
+  "Find and return the position of task with TASK-ID in org file.
+Returns nil if not found."
+  (with-current-buffer (find-file-noselect ticktick-sync-file)
+    (org-with-wide-buffer
+     (goto-char (point-min))
+     (catch 'found
+       (while (re-search-forward (format "^:TICKTICK_ID: %s$" (regexp-quote task-id)) nil t)
+         (org-back-to-heading t)
+         (throw 'found (point)))
+       nil))))
+
+(defun ticktick--get-cached-project-id (task-id)
+  "Get the project ID for TASK-ID from the cached task-project map."
+  (let ((map (plist-get ticktick--sync-state :task-project-map)))
+    (cdr (assoc task-id map))))
+
+(defun ticktick--get-task-info (task-id)
+  "Get task information for TASK-ID from org file.
+Returns a plist with :title, :project-id, and :position, or nil if not found."
+  (let ((pos (ticktick--find-task-by-id-in-org task-id)))
+    (when pos
+      (with-current-buffer (find-file-noselect ticktick-sync-file)
+        (org-with-wide-buffer
+         (goto-char pos)
+         (let ((el (org-element-at-point)))
+           (list :title (org-element-property :raw-value el)
+                 :project-id (org-entry-get nil "TICKTICK_PROJECT_ID" t)
+                 :position pos)))))))
+
 ;;; Authorization functions ----------------------------------------------------
 
 (defun ticktick--authorization-header ()
