@@ -517,6 +517,26 @@ Returns t if user confirms, nil otherwise."
       (y-or-n-p prompt)))
    (t t)))
 
+;;; Deletion handlers ----------------------------------------------------------
+
+(defun ticktick--handle-org-deletions (deleted-ids)
+  "Handle tasks that were deleted from Org (in DELETED-IDS).
+Deletes them from TickTick API if user confirms."
+  (when deleted-ids
+    (message "Detected %d task(s) deleted from Org" (length deleted-ids))
+    (dolist (task-id deleted-ids)
+      (when (ticktick--confirm-deletion-p task-id 'from-org)
+        (ticktick--delete-task-from-api task-id)))))
+
+(defun ticktick--handle-api-deletions (deleted-ids)
+  "Handle tasks that were deleted from TickTick API (in DELETED-IDS).
+Deletes or archives them in Org if user confirms."
+  (when deleted-ids
+    (message "Detected %d task(s) deleted from TickTick" (length deleted-ids))
+    (dolist (task-id deleted-ids)
+      (when (ticktick--confirm-deletion-p task-id 'from-api)
+        (ticktick--delete-task-from-org task-id)))))
+
 ;;; Authorization functions ----------------------------------------------------
 
 (defun ticktick--authorization-header ()
