@@ -93,6 +93,11 @@
 ;; - `ticktick-autosync': Enable automatic syncing on focus changes
 ;; - `ticktick-sync-interval': Enable automatic syncing every N minutes
 ;; - `ticktick-httpd-port': Port for OAuth callback server
+;; - `ticktick-delete-behavior': How to handle deletions (ask/archive/delete/sync-only)
+;; - `ticktick-archive-location': Where to archive deleted tasks (separate-file/archive-heading)
+;; - `ticktick-archive-file': Path to archive file for deleted tasks
+;; - `ticktick-confirm-deletions': Whether to prompt for deletion confirmation
+;; - `ticktick-deletion-conflict-policy': How to resolve modify-delete conflicts
 ;;
 ;; For debugging OAuth issues:
 ;; M-x ticktick-debug-oauth
