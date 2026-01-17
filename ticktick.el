@@ -198,6 +198,104 @@ After changing this value, call `ticktick-toggle-sync-timer' to apply changes."
 ;; Load any existing token at startup
 (ticktick--load-token)
 
+;;; State tracking for deletion detection -------------------------------------
+
+(defvar ticktick--sync-state nil
+  "In-memory cache of the sync state.
+This is a plist with keys:
+  :last-sync-time  - timestamp of last successful sync
+  :org-task-ids    - list of task IDs present in Org file during last sync
+  :api-task-ids    - list of task IDs returned by API during last sync
+  :task-project-map - alist mapping task IDs to project IDs
+  :pending-deletes - list of deletions that failed and need retry
+  :failed-operations - list of operations that failed with error details")
+
+(defun ticktick--state-file-path ()
+  "Return the path to the state file."
+  (expand-file-name ".ticktick-state.el" ticktick-dir))
+
+(defun ticktick--load-state ()
+  "Load sync state from disk into `ticktick--sync-state`."
+  (let ((state-file (ticktick--state-file-path)))
+    (when (file-exists-p state-file)
+      (condition-case err
+          (with-temp-buffer
+            (insert-file-contents state-file)
+            (goto-char (point-min))
+            (setq ticktick--sync-state (read (current-buffer))))
+        (error
+         (message "Warning: Could not load state file: %s" (error-message-string err))
+         (setq ticktick--sync-state nil))))))
+
+(defun ticktick--save-state ()
+  "Persist `ticktick--sync-state` to disk."
+  (when ticktick--sync-state
+    (ticktick--ensure-dir)
+    (let ((state-file (ticktick--state-file-path)))
+      (condition-case err
+          (with-temp-file state-file
+            (insert (prin1-to-string ticktick--sync-state)))
+        (error
+         (message "Warning: Could not save state file: %s" (error-message-string err)))))))
+
+(defun ticktick--collect-org-task-ids ()
+  "Scan the org sync file and return a list of all TICKTICK_ID values."
+  (let ((task-ids nil))
+    (with-current-buffer (find-file-noselect ticktick-sync-file)
+      (org-with-wide-buffer
+       (goto-char (point-min))
+       (while (re-search-forward "^:TICKTICK_ID: \\(.+\\)$" nil t)
+         (let ((id (match-string 1)))
+           (when (and id (not (string-empty-p id)))
+             (push id task-ids))))))
+    (nreverse task-ids)))
+
+(defun ticktick--collect-api-task-ids (all-projects)
+  "Extract all task IDs from ALL-PROJECTS API response.
+Returns a list of task IDs."
+  (let ((task-ids nil))
+    (dolist (project all-projects)
+      (let* ((project-id (plist-get project :id))
+             (project-data (ignore-errors
+                            (ticktick-request "GET" (format "/open/v1/project/%s/data" project-id))))
+             (tasks (when project-data (plist-get project-data :tasks))))
+        (dolist (task tasks)
+          (let ((id (plist-get task :id)))
+            (when id (push id task-ids))))))
+    (nreverse task-ids)))
+
+(defun ticktick--collect-task-project-map ()
+  "Scan the org file and return an alist of (TASK-ID . PROJECT-ID) pairs."
+  (let ((map nil))
+    (with-current-buffer (find-file-noselect ticktick-sync-file)
+      (org-with-wide-buffer
+       (goto-char (point-min))
+       (while (outline-next-heading)
+         (when (= (org-current-level) 2)
+           (let ((task-id (org-entry-get nil "TICKTICK_ID"))
+                 (project-id (org-entry-get nil "TICKTICK_PROJECT_ID" t)))
+             (when (and task-id (not (string-empty-p task-id))
+                       project-id (not (string-empty-p project-id)))
+               (push (cons task-id project-id) map)))))))
+    (nreverse map)))
+
+(defun ticktick--ensure-state-initialized ()
+  "Initialize the state file if it doesn't exist or is empty."
+  (unless ticktick--sync-state
+    (ticktick--load-state))
+  (unless ticktick--sync-state
+    (setq ticktick--sync-state
+          (list :last-sync-time nil
+                :org-task-ids nil
+                :api-task-ids nil
+                :task-project-map nil
+                :pending-deletes nil
+                :failed-operations nil))
+    (ticktick--save-state)))
+
+;; Load state at startup
+(ticktick--load-state)
+
 ;;; Authorization functions ----------------------------------------------------
 
 (defun ticktick--authorization-header ()
@@ -638,7 +736,7 @@ Return the buffer position at the start of the heading."
   (when ticktick--sync-timer
     (cancel-timer ticktick--sync-timer)
     (setq ticktick--sync-timer nil))
-  (when (and ticktick-sync-interval
+  (when (and ticktick-sync-intervalq
              (numberp ticktick-sync-interval)
              (> ticktick-sync-interval 0))
     (setq ticktick--sync-timer
