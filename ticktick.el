@@ -390,6 +390,133 @@ Returns a plist with :title, :project-id, and :position, or nil if not found."
                  :project-id (org-entry-get nil "TICKTICK_PROJECT_ID" t)
                  :position pos)))))))
 
+;;; Deletion execution ---------------------------------------------------------
+
+(defun ticktick--delete-task-from-api (task-id)
+  "Delete task with TASK-ID from TickTick API.
+Returns t on success, nil on failure."
+  (condition-case err
+      (progn
+        (ticktick-request "DELETE" (format "/open/v1/task/%s" task-id))
+        (message "Deleted task %s from TickTick" task-id)
+        t)
+    (error
+     (message "Failed to delete task %s from TickTick: %s"
+              task-id (error-message-string err))
+     ;; Add to failed operations for retry
+     (let ((failed (plist-get ticktick--sync-state :failed-operations)))
+       (push (list :type 'delete-from-api
+                   :task-id task-id
+                   :error (error-message-string err)
+                   :timestamp (format-time-string "%FT%T%z"))
+             failed)
+       (plist-put ticktick--sync-state :failed-operations failed)
+       (ticktick--save-state))
+     nil)))
+
+(defun ticktick--delete-task-from-org (task-id)
+  "Delete task with TASK-ID from org file.
+Behavior depends on `ticktick-delete-behavior'.
+Returns t on success, nil if task not found."
+  (let ((pos (ticktick--find-task-by-id-in-org task-id)))
+    (if (not pos)
+        (progn
+          (message "Task %s not found in org file" task-id)
+          nil)
+      (with-current-buffer (find-file-noselect ticktick-sync-file)
+        (org-with-wide-buffer
+         (goto-char pos)
+         (let ((task-info (ticktick--get-task-info task-id)))
+           (cond
+            ((eq ticktick-delete-behavior 'archive)
+             (ticktick--archive-task task-id task-info))
+            (t
+             ;; Hard delete
+             (delete-region (org-entry-beginning-position)
+                           (org-entry-end-position))
+             (message "Deleted task '%s' from org file"
+                     (plist-get task-info :title)))))
+         (save-buffer))
+        t))))
+
+(defun ticktick--archive-task (task-id task-info)
+  "Archive task with TASK-ID and TASK-INFO to the configured archive location."
+  (let ((task-title (plist-get task-info :title))
+        (task-content (save-excursion
+                        (goto-char (plist-get task-info :position))
+                        (buffer-substring-no-properties
+                         (org-entry-beginning-position)
+                         (org-entry-end-position)))))
+    (cond
+     ((eq ticktick-archive-location 'separate-file)
+      ;; Archive to separate file
+      (ticktick--ensure-dir)
+      (with-current-buffer (find-file-noselect ticktick-archive-file)
+        (goto-char (point-max))
+        (unless (bolp) (insert "\n"))
+        (insert "* ARCHIVED " task-title "\n")
+        (insert ":PROPERTIES:\n")
+        (insert (format ":ARCHIVED_AT: [%s]\n"
+                       (format-time-string "%F %a %H:%M")))
+        (insert (format ":ARCHIVED_REASON: Deleted in TickTick\n"))
+        (insert (format ":TICKTICK_ID: %s\n" task-id))
+        (insert ":END:\n")
+        ;; Copy the original task content (excluding the heading line)
+        (let ((lines (split-string task-content "\n")))
+          (dolist (line (cdr lines))
+            (unless (string-match-p "^:PROPERTIES:" line)
+              (insert line "\n"))))
+        (save-buffer)))
+     ((eq ticktick-archive-location 'archive-heading)
+      ;; Archive under "Archived Tasks" heading in sync file
+      (with-current-buffer (find-file-noselect ticktick-sync-file)
+        (org-with-wide-buffer
+         (goto-char (point-min))
+         (unless (re-search-forward "^\\* Archived Tasks$" nil t)
+           ;; Create archive heading if it doesn't exist
+           (goto-char (point-max))
+           (unless (bolp) (insert "\n"))
+           (insert "* Archived Tasks\n"))
+         (goto-char (match-end 0))
+         (forward-line)
+         (insert task-content)
+         (insert "\n")
+         ;; Add archive metadata
+         (org-back-to-heading t)
+         (org-set-property "ARCHIVED_AT"
+                          (format-time-string "[%F %a %H:%M]"))
+         (org-set-property "ARCHIVED_REASON" "Deleted in TickTick")
+         (save-buffer)))))
+    ;; Delete original task from sync file
+    (with-current-buffer (find-file-noselect ticktick-sync-file)
+      (org-with-wide-buffer
+       (goto-char (plist-get task-info :position))
+       (delete-region (org-entry-beginning-position)
+                     (org-entry-end-position))
+       (save-buffer)))
+    (message "Archived task '%s'" task-title)))
+
+(defun ticktick--confirm-deletion-p (task-id direction)
+  "Ask user to confirm deletion of task with TASK-ID.
+DIRECTION is either 'from-org or 'from-api indicating where the task is being deleted from.
+Returns t if user confirms, nil otherwise."
+  (cond
+   ((eq ticktick-delete-behavior 'sync-only)
+    nil)
+   ((eq ticktick-delete-behavior 'delete)
+    t)
+   ((or (eq ticktick-delete-behavior 'ask)
+        ticktick-confirm-deletions)
+    (let* ((task-info (ticktick--get-task-info task-id))
+           (task-title (if task-info
+                          (plist-get task-info :title)
+                        task-id))
+           (prompt (if (eq direction 'from-org)
+                      (format "Task '%s' was deleted locally. Delete from TickTick? " task-title)
+                    (format "Task '%s' was deleted remotely. Delete from Org? " task-title))))
+      (y-or-n-p prompt)))
+   (t t)))
+
 ;;; Authorization functions ----------------------------------------------------
 
 (defun ticktick--authorization-header ()
