@@ -164,6 +164,50 @@ After changing this value, call `ticktick-toggle-sync-timer' to apply changes."
                  (integer :tag "Minutes"))
   :group 'ticktick)
 
+(defcustom ticktick-delete-behavior 'ask
+  "How to handle task deletions during sync.
+- `ask': Prompt user for confirmation before each deletion
+- `archive': Move deleted tasks to archive instead of deleting
+- `delete': Delete tasks without confirmation
+- `sync-only': Only sync new/modified tasks, never delete"
+  :type '(choice (const :tag "Ask for confirmation" ask)
+                 (const :tag "Archive instead of delete" archive)
+                 (const :tag "Delete without confirmation" delete)
+                 (const :tag "Never delete (sync only)" sync-only))
+  :group 'ticktick)
+
+(defcustom ticktick-archive-location 'separate-file
+  "Where to archive deleted tasks.
+- `separate-file': Archive to a separate file specified by `ticktick-archive-file'
+- `archive-heading': Archive under an \"Archived Tasks\" heading in the sync file"
+  :type '(choice (const :tag "Separate archive file" separate-file)
+                 (const :tag "Archive heading in sync file" archive-heading))
+  :group 'ticktick)
+
+(defcustom ticktick-archive-file
+  (expand-file-name "ticktick-archive.org" ticktick-dir)
+  "Path to the archive file for deleted tasks."
+  :type 'file
+  :group 'ticktick)
+
+(defcustom ticktick-confirm-deletions t
+  "If non-nil, ask for confirmation before deleting tasks.
+This setting is overridden when `ticktick-delete-behavior' is set to `delete'."
+  :type 'boolean
+  :group 'ticktick)
+
+(defcustom ticktick-deletion-conflict-policy 'keep-newest
+  "How to resolve conflicts when a task is modified on one side and deleted on the other.
+- `keep-newest': Compare timestamps and keep the more recent action
+- `prefer-org': Always keep the Org version (don't delete if modified locally)
+- `prefer-api': Always keep the TickTick version (don't delete if modified remotely)
+- `ask': Prompt user to decide"
+  :type '(choice (const :tag "Keep newest modification" keep-newest)
+                 (const :tag "Prefer Org modifications" prefer-org)
+                 (const :tag "Prefer TickTick modifications" prefer-api)
+                 (const :tag "Ask user" ask))
+  :group 'ticktick)
+
 (defvar ticktick-token nil
   "Access token plist for accessing the TickTick API.")
 
