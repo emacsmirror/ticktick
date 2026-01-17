@@ -30,11 +30,13 @@
 ;;
 ;; - Bidirectional sync: changes in either TickTick or Org Mode are reflected
 ;;   in both systems
+;; - Task deletion synchronization: deletions on one side propagate to the other
+;; - Configurable deletion behavior: ask, archive, or auto-delete
 ;; - OAuth2 authentication with automatic token refresh
 ;; - Preserves task metadata: priorities, due dates, completion status,
 ;;   descriptions, and tags
 ;; - Project-based organization matching TickTick's structure
-;; - Optional automatic syncing on focus changes
+;; - Optional automatic syncing on focus changes and timer-based intervals
 ;; - Tag synchronization using Org mode's native tag syntax
 ;;
 ;; SETUP:
@@ -55,12 +57,16 @@
 ;; USAGE:
 ;;
 ;; Main commands:
-;; - `ticktick-sync': Full bidirectional sync
+;; - `ticktick-sync': Full bidirectional sync (includes deletion sync)
 ;; - `ticktick-fetch-to-org': Pull tasks from TickTick to Org
 ;; - `ticktick-push-from-org': Push Org tasks to TickTick
 ;; - `ticktick-authorize': Set up OAuth authentication
 ;; - `ticktick-refresh-token': Manually refresh auth token
 ;; - `ticktick-toggle-sync-timer': Toggle automatic timer-based syncing
+;; - `ticktick-delete-task-at-point': Delete task at cursor from both sides
+;; - `ticktick-show-sync-state': View current synchronization state
+;; - `ticktick-retry-failed-deletions': Retry any failed deletion operations
+;; - `ticktick-clear-sync-state': Reset sync state (use if corrupted)
 ;;
 ;; Tasks are stored in the file specified by `ticktick-sync-file'
 ;; (defaults to ~/.emacs.d/ticktick/ticktick.org) with this structure:
@@ -929,16 +935,38 @@ Return the buffer position at the start of the heading."
       nil)))
 
 (defun ticktick-fetch-to-org ()
-  "Fetch all tasks from TickTick and update org file without duplicating."
+  "Fetch all tasks from TickTick and update org file without duplicating.
+Also detects and handles tasks deleted from TickTick since last sync."
   (interactive)
+  ;; Initialize state tracking
+  (ticktick--ensure-state-initialized)
+
+  ;; Fetch projects and tasks from API
   (let* ((inbox-project `(:id "inbox" :name "Inbox"))
          (projects (ticktick-request "GET" "/open/v1/project"))
          (all-projects (cons inbox-project projects)))
-    (with-current-buffer (find-file-noselect ticktick-sync-file)
-      (org-with-wide-buffer
-       (dolist (project all-projects)
-         (ticktick--sync-project project))
-       (save-buffer)))))
+
+    ;; Collect current API task IDs
+    (let ((current-api-ids (ticktick--collect-api-task-ids all-projects))
+          (previous-api-ids (plist-get ticktick--sync-state :api-task-ids)))
+
+      ;; Detect deletions from API (tasks that existed before but are gone now)
+      (when previous-api-ids
+        (let ((deleted-ids (cl-set-difference previous-api-ids current-api-ids :test #'string=)))
+          (when deleted-ids
+            (ticktick--handle-api-deletions deleted-ids))))
+
+      ;; Sync all projects and tasks
+      (with-current-buffer (find-file-noselect ticktick-sync-file)
+        (org-with-wide-buffer
+         (dolist (project all-projects)
+           (ticktick--sync-project project))
+         (save-buffer)))
+
+      ;; Update state with current API task IDs
+      (plist-put ticktick--sync-state :api-task-ids current-api-ids)
+      (plist-put ticktick--sync-state :last-sync-time (format-time-string "%FT%T%z"))
+      (ticktick--save-state))))
 
 (defun ticktick-push-from-org ()
   "Push all updated org tasks back to TickTick.
@@ -995,7 +1023,7 @@ Also detects and handles tasks deleted from Org since last sync."
   (when ticktick--sync-timer
     (cancel-timer ticktick--sync-timer)
     (setq ticktick--sync-timer nil))
-  (when (and ticktick-sync-intervalq
+  (when (and ticktick-sync-interval
              (numberp ticktick-sync-interval)
              (> ticktick-sync-interval 0))
     (setq ticktick--sync-timer
@@ -1052,6 +1080,110 @@ Also detects and handles tasks deleted from Org since last sync."
     (with-suppressed-warnings ((obsolete focus-out-hook))
       (remove-hook 'focus-out-hook #'ticktick--autosync))))
 
+;;; Commands for deletion management --------------------------------------
+
+;;;###autoload
+(defun ticktick-delete-task-at-point ()
+  "Delete the TickTick task at point.
+This will delete the task both locally and from TickTick after confirmation.
+Respects the `ticktick-delete-behavior' setting."
+  (interactive)
+  (unless (derived-mode-p 'org-mode)
+    (user-error "This command must be run in an org-mode buffer"))
+  (let ((task-id (org-entry-get nil "TICKTICK_ID")))
+    (unless task-id
+      (user-error "No TickTick task at point"))
+    (let ((task-info (ticktick--get-task-info task-id)))
+      (when (or (eq ticktick-delete-behavior 'delete)
+                (y-or-n-p (format "Delete task '%s' from both Org and TickTick? "
+                                 (plist-get task-info :title))))
+        ;; Delete from API first
+        (when (ticktick--delete-task-from-api task-id)
+          ;; Then delete from Org
+          (delete-region (org-entry-beginning-position)
+                        (org-entry-end-position))
+          (save-buffer)
+          (message "Task deleted successfully"))))))
+
+;;;###autoload
+(defun ticktick-retry-failed-deletions ()
+  "Retry all failed deletion operations from the state file."
+  (interactive)
+  (ticktick--load-state)
+  (let ((failed (plist-get ticktick--sync-state :failed-operations)))
+    (if (not failed)
+        (message "No failed operations to retry")
+      (message "Retrying %d failed operation(s)..." (length failed))
+      (let ((retry-count 0)
+            (success-count 0))
+        (dolist (op failed)
+          (setq retry-count (1+ retry-count))
+          (let ((op-type (plist-get op :type))
+                (task-id (plist-get op :task-id)))
+            (condition-case err
+                (progn
+                  (cond
+                   ((eq op-type 'delete-from-api)
+                    (when (ticktick--delete-task-from-api task-id)
+                      (setq success-count (1+ success-count))
+                      (setq failed (delq op failed))))
+                   ((eq op-type 'delete-from-org)
+                    (when (ticktick--delete-task-from-org task-id)
+                      (setq success-count (1+ success-count))
+                      (setq failed (delq op failed))))))
+              (error
+               (message "Failed to retry operation for task %s: %s"
+                       task-id (error-message-string err))))))
+        (plist-put ticktick--sync-state :failed-operations failed)
+        (ticktick--save-state)
+        (message "Retry complete: %d/%d operations succeeded"
+                success-count retry-count)))))
+
+;;;###autoload
+(defun ticktick-show-sync-state ()
+  "Display the current sync state in a temporary buffer."
+  (interactive)
+  (ticktick--load-state)
+  (let ((buf (get-buffer-create "*TickTick Sync State*")))
+    (with-current-buffer buf
+      (erase-buffer)
+      (insert "TickTick Synchronization State\n")
+      (insert "===============================\n\n")
+      (insert (format "Last sync time: %s\n"
+                     (or (plist-get ticktick--sync-state :last-sync-time) "Never")))
+      (insert (format "Org task count: %d\n"
+                     (length (plist-get ticktick--sync-state :org-task-ids))))
+      (insert (format "API task count: %d\n"
+                     (length (plist-get ticktick--sync-state :api-task-ids))))
+      (insert (format "Failed operations: %d\n"
+                     (length (plist-get ticktick--sync-state :failed-operations))))
+      (insert "\n")
+      (when (plist-get ticktick--sync-state :failed-operations)
+        (insert "Failed Operations:\n")
+        (insert "------------------\n")
+        (dolist (op (plist-get ticktick--sync-state :failed-operations))
+          (insert (format "  Type: %s\n" (plist-get op :type)))
+          (insert (format "  Task ID: %s\n" (plist-get op :task-id)))
+          (insert (format "  Error: %s\n" (plist-get op :error)))
+          (insert (format "  Timestamp: %s\n\n" (plist-get op :timestamp)))))
+      (insert "\nState file location: ")
+      (insert (ticktick--state-file-path))
+      (goto-char (point-min))
+      (special-mode))
+    (display-buffer buf)))
+
+;;;###autoload
+(defun ticktick-clear-sync-state ()
+  "Clear the sync state file.
+This will reset deletion tracking, requiring a fresh sync.
+Use this if the state file becomes corrupted."
+  (interactive)
+  (when (y-or-n-p "Clear sync state? This will reset deletion tracking. ")
+    (setq ticktick--sync-state nil)
+    (let ((state-file (ticktick--state-file-path)))
+      (when (file-exists-p state-file)
+        (delete-file state-file)))
+    (message "Sync state cleared. Run ticktick-sync to rebuild state.")))
 
 (provide 'ticktick)
 ;;; ticktick.el ends here
